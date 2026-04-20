@@ -1,0 +1,72 @@
+{
+  "display": {
+    "title": "Decoy Doge",
+    "description": "Trust No Doge. Swing your bat. Find the real players.",
+    "navmapThumbnail": "images/scene-thumbnail.png",
+    "favicon": "favicon_asset"
+  },
+  "owner": "",
+  "contact": {
+    "name": "Decoy Doge Team",
+    "email": "contact@decoydoge.xyz"
+  },
+  "main": "bin/index.js",
+  "runtimeVersion": "7",
+  "tags": [
+    "game",
+    "social-deduction",
+    "doge",
+    "meme",
+    "pvp"
+  ],
+  "scene": {
+    "parcels": [
+      "0,0",
+      "0,1",
+      "0,2",
+      "1,0",
+      "1,1",
+      "1,2",
+      "2,0",
+      "2,1",
+      "2,2"
+    ],
+    "base": "0,0"
+  },
+  "spawnPoints": [
+    {
+      "name": "spawn",
+      "default": true,
+      "position": {
+        "x": [
+          2,
+          4
+        ],
+        "y": [
+          0.1,
+          0.1
+        ],
+        "z": [
+          2,
+          4
+        ]
+      },
+      "cameraTarget": {
+        "x": 24,
+        "y": 1.6,
+        "z": 24
+      }
+    }
+  ],
+  "requiredPermissions": [],
+  "featureToggles": {
+    "voiceChat": "enabled",
+    "portableExperiences": "enabled"
+  },
+  "creator": "",
+  "skyboxConfig": {},
+  "source": {
+    "origin": "creator-hub",
+    "projectId": "10ab6de9-c7b1-4c42-b807-ab14facd7428"
+  }
+}

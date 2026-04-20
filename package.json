@@ -1,0 +1,19 @@
+{
+  "name": "doge-hunt",
+  "description": "Doge Hunt - Trust No Doge. A social deduction game MVP.",
+  "version": "0.1.0",
+  "private": true,
+  "dependencies": {
+    "@dcl/sdk": "^7.6.0",
+    "@dcl-sdk/utils": "^1.2.0",
+    "@dcl/js-runtime": "7.22.3"
+  },
+  "devDependencies": {
+    "@dcl/sdk-commands": "^7.6.0"
+  },
+  "scripts": {
+    "start": "sdk-commands start",
+    "build": "sdk-commands build",
+    "deploy": "sdk-commands deploy"
+  }
+}
