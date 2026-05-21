@@ -61,6 +61,7 @@ export function createLobby(): void {
     (event) => {
       console.log('[Lobby] ✅ BUTTON CLICKED!', event)
       showModeSelection = true
+      console.log('[Lobby] showModeSelection set to:', showModeSelection)
     }
   )
   
@@ -109,11 +110,17 @@ export function createLobby(): void {
 
 /** Mode selection UI */
 function setupLobbyUI(): void {
+  console.log('[Lobby] Setting up UI renderer...')
+  
   // This function is called every frame by ReactEcsRenderer
   const uiComponent = () => {
+    console.log('[Lobby] UI render, showModeSelection =', showModeSelection)
+    
     // Only show modal when button is clicked
     if (!showModeSelection) return null
 
+    console.log('[Lobby] Rendering mode selection UI!')
+    
     return h(UiEntity, {
       uiTransform: {
         width: '100%',
