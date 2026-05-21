@@ -20,7 +20,11 @@ const LOBBY_X = 8
 const LOBBY_Z = 8
 
 let startButtonEntity: Entity | null = null
-let showModeSelection = false
+
+// UI state (mutable object so React can detect changes)
+const uiState = {
+  showModeSelection: false
+}
 
 /** Create the lobby area with start button */
 export function createLobby(): void {
@@ -60,8 +64,8 @@ export function createLobby(): void {
     },
     (event) => {
       console.log('[Lobby] ✅ BUTTON CLICKED!', event)
-      showModeSelection = true
-      console.log('[Lobby] showModeSelection set to:', showModeSelection)
+      uiState.showModeSelection = true
+      console.log('[Lobby] showModeSelection set to:', uiState.showModeSelection)
     }
   )
   
@@ -114,10 +118,10 @@ function setupLobbyUI(): void {
   
   // This function is called every frame by ReactEcsRenderer
   const uiComponent = () => {
-    console.log('[Lobby] UI render, showModeSelection =', showModeSelection)
+    console.log('[Lobby] UI render, showModeSelection =', uiState.showModeSelection)
     
     // Only show modal when button is clicked
-    if (!showModeSelection) return null
+    if (!uiState.showModeSelection) return null
 
     console.log('[Lobby] Rendering mode selection UI!')
     
@@ -159,7 +163,7 @@ function setupLobbyUI(): void {
           uiTransform: { width: 300, height: 60, margin: { bottom: 20 } },
           fontSize: 18,
           onMouseDown: () => {
-            showModeSelection = false
+            uiState.showModeSelection = false
             startSinglePlayer()
           },
         }),
@@ -178,7 +182,7 @@ function setupLobbyUI(): void {
           uiTransform: { width: 200, height: 50 },
           fontSize: 16,
           onMouseDown: () => {
-            showModeSelection = false
+            uiState.showModeSelection = false
           },
         }),
       ]),
@@ -217,5 +221,5 @@ export function returnToLobby(): void {
 
   // Reset state
   setState(GameState.LOBBY)
-  showModeSelection = false
+  uiState.showModeSelection = false
 }
