@@ -52,6 +52,12 @@ const NPC_LABEL_FONT_SIZE = 3
 export let aliveCount = 0
 export let NPC_TOTAL = 0
 
+/** Reset NPC counters */
+export function resetNpcCounters(): void {
+  aliveCount = 0
+  NPC_TOTAL = 0
+}
+
 /** Generate random waypoints within the arena */
 function generateWaypoints(count: number): number[] {
   const points: number[] = []

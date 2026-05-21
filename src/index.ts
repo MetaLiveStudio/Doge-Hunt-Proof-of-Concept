@@ -3,6 +3,7 @@
  *
  * Scene: Neon-noir arena (3x3 parcels, 48m x 48m)
  * Features:
+ *   - Lobby system with mode selection
  *   - Dark arena with neon-lit walls, pillars, corridors
  *   - 12 NPC Doges patrolling with "?" labels
  *   - Player disguised as Doge
@@ -13,6 +14,8 @@
  */
 import { engine } from '@dcl/sdk/ecs'
 
+import { GameState, isPlaying } from './gameState'
+import { createLobby, lobbySystem } from './lobby'
 import { buildArena } from './arena'
 import { spawnAllNpcs, npcPatrolSystem, aliveCount } from './npc'
 import { combatSystem, totalBonks } from './combat'
@@ -24,14 +27,28 @@ import {
   roundTimerSystem,
   createAliveCounter,
   updateAliveCounter,
+  roundTimeLeft,
+  roundOver,
 } from './ui'
 import { setupPlayerDisguise, dogeBodyEntity } from './player'
 import { setupSkills, skillSystem } from './skills'
 import { setupHud } from './hud'
+import { setupGameOverUI, showGameOverUI } from './gameOverUI'
 
 const NPC_COUNT = 12
 
-export function main() {
+let gameInitialized = false
+let skillsInitialized = false
+
+/** Start the game (called from lobby) */
+export function startGame() {
+  if (gameInitialized) {
+    console.log('[Game] Already initialized, skipping...')
+    return
+  }
+
+  console.log('[Game] Starting game...')
+
   // 1. Build the arena
   buildArena()
 
@@ -41,23 +58,51 @@ export function main() {
   // 3. Disguise the player as a Doge
   setupPlayerDisguise()
 
-  // 4. Setup skills (Rock Solid)
-  // Delay by 1 frame so dogeBodyEntity is set
-  let skillsInitialized = false
-
+  // 4. Setup UI
   createBonkCounter()
   createRoundTimer()
   createAliveCounter(NPC_COUNT)
   setupHud()
 
-  // 5. Register game systems
-  engine.addSystem(npcPatrolSystem)
-  engine.addSystem(combatSystem)
-  engine.addSystem(killFeedSystem)
-  engine.addSystem(roundTimerSystem)
+  gameInitialized = true
+}
 
-  // 6. Skills init + system
+export function main() {
+  console.log('Doge Hunt Proof of Concept loaded. Trust No Doge.')
+
+  // 1. Create lobby
+  createLobby()
+
+  // 2. Setup game over UI
+  setupGameOverUI()
+
+  // 2. Register lobby system
+  engine.addSystem(lobbySystem)
+
+  // 3. Register game systems (only run when playing)
   engine.addSystem((dt: number) => {
+    if (!isPlaying()) return
+    npcPatrolSystem(dt)
+  })
+
+  engine.addSystem((dt: number) => {
+    if (!isPlaying()) return
+    combatSystem(dt)
+  })
+
+  engine.addSystem((dt: number) => {
+    if (!isPlaying()) return
+    killFeedSystem(dt)
+  })
+
+  engine.addSystem((dt: number) => {
+    if (!isPlaying()) return
+    roundTimerSystem(dt)
+  })
+
+  // 4. Skills init + system
+  engine.addSystem((dt: number) => {
+    if (!isPlaying()) return
     if (!skillsInitialized && dogeBodyEntity) {
       setupSkills(dogeBodyEntity)
       skillsInitialized = true
@@ -67,9 +112,11 @@ export function main() {
     }
   })
 
+  // 5. UI update system
   let lastBonks = 0
   let lastAlive = NPC_COUNT
   engine.addSystem(() => {
+    if (!isPlaying()) return
     if (totalBonks !== lastBonks) {
       lastBonks = totalBonks
       updateBonkCounter(totalBonks)
@@ -80,5 +127,14 @@ export function main() {
     }
   })
 
-  console.log('Doge Hunt Proof of Concept loaded. Trust No Doge.')
+  // 6. Game over detection
+  let gameOverTriggered = false
+  engine.addSystem(() => {
+    if (!isPlaying()) return
+    if (roundOver && !gameOverTriggered) {
+      gameOverTriggered = true
+      console.log('[Game] Round over! Showing game over UI...')
+      showGameOverUI()
+    }
+  })
 }

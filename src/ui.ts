@@ -83,6 +83,12 @@ let timerEntity: Entity | null = null
 export let roundTimeLeft = 180
 export let roundOver = false
 
+/** Reset round timer */
+export function resetRoundTimer(): void {
+  roundTimeLeft = 180
+  roundOver = false
+}
+
 export function createRoundTimer(): void {
   timerEntity = engine.addEntity()
   Transform.create(timerEntity, {
@@ -105,6 +111,7 @@ export function roundTimerSystem(dt: number): void {
     roundTimeLeft = 0
     roundOver = true
     addKillFeedMessage('ROUND OVER! Time is up.')
+    // Trigger game over UI (will be handled in index.ts)
   }
   if (timerEntity !== null) {
     const minutes = Math.floor(roundTimeLeft / 60)

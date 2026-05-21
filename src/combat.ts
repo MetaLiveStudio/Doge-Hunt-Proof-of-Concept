@@ -26,6 +26,11 @@ const KILL_MESSAGES = [
 
 export let totalBonks = 0
 
+/** Reset combat state */
+export function resetCombat(): void {
+  totalBonks = 0
+}
+
 /** Knockback an NPC and swap to dead model */
 function knockbackNpc(npcRoot: Entity, hitOrigin: Vector3): void {
   const transform = Transform.getMutable(npcRoot)

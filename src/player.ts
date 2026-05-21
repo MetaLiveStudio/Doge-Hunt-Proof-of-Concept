@@ -12,19 +12,20 @@ import { isPlayerDisguised } from './skills'
 
 const CX = 24
 const CZ = 24
+const ARENA_SIZE = 44
 
 // Exported so skills.ts can reference it
 export let dogeBodyEntity: number = 0
 
 /** Set up the player's Doge disguise */
 export function setupPlayerDisguise(): void {
-  // 1. AvatarModifierArea — hides real player avatar in the arena
+  // 1. AvatarModifierArea — hides real player avatar in the arena only
   const modifierEntity = engine.addEntity()
   Transform.create(modifierEntity, {
     position: Vector3.create(CX, 2, CZ),
   })
   AvatarModifierArea.create(modifierEntity, {
-    area: Vector3.create(48, 8, 48),
+    area: Vector3.create(ARENA_SIZE, 8, ARENA_SIZE), // Only arena area, not lobby
     modifiers: [AvatarModifierType.AMT_HIDE_AVATARS],
     excludeIds: [],
   })
