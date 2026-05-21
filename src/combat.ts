@@ -8,7 +8,7 @@ import {
   GltfContainer, TextShape,
 } from '@dcl/sdk/ecs'
 import { Vector3 } from '@dcl/sdk/math'
-import { NpcHitbox, NpcPatrol, DEAD_DOGE_MODEL, decrementAlive, NPC_DEAD_VISUAL_SCALE } from './npc'
+import { NpcHitbox, NpcPatrol, DEAD_DOGE_MODEL, decrementAlive, NPC_DEAD_VISUAL_SCALE, aliveCount } from './npc'
 import { addKillFeedMessage } from './ui'
 
 const KILL_MESSAGES = [
@@ -77,8 +77,12 @@ function knockbackNpc(npcRoot: Entity, hitOrigin: Vector3): void {
   // Kill feed
   const msg = KILL_MESSAGES[Math.floor(Math.random() * KILL_MESSAGES.length)]
   addKillFeedMessage(msg)
+  
+  // Check if all NPCs eliminated
+  if (aliveCount === 0) {
+    addKillFeedMessage('🎉 ALL DOGES ELIMINATED! 🎉')
+  }
 }
-
 /** Combat system — detect clicks on NPCs */
 export function combatSystem(_dt: number): void {
   for (const [hitbox] of engine.getEntitiesWith(NpcHitbox, Transform)) {

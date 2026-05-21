@@ -156,9 +156,13 @@ export function main() {
   let gameOverTriggered = false
   engine.addSystem(() => {
     if (!isPlaying()) return
-    if (roundOver && !gameOverTriggered) {
+    
+    // Check if game should end
+    const shouldEnd = roundOver || aliveCount === 0
+    
+    if (shouldEnd && !gameOverTriggered) {
       gameOverTriggered = true
-      console.log('[Game] Round over! Showing game over UI...')
+      console.log('[Game] Game over! Reason:', roundOver ? 'Time up' : 'All NPCs eliminated')
       showGameOverUI()
     }
   })
