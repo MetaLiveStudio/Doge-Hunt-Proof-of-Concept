@@ -24,6 +24,8 @@ let showModeSelection = false
 
 /** Create the lobby area with start button */
 export function createLobby(): void {
+  console.log('[Lobby] Creating lobby...')
+  
   // Floor platform
   const platform = engine.addEntity()
   Transform.create(platform, {
@@ -38,41 +40,38 @@ export function createLobby(): void {
     roughness: 0.7,
   })
 
-  // Glowing start button (cube)
+  // Glowing start button (cube) - SIMPLIFIED
   startButtonEntity = engine.addEntity()
-  Transform.create(startButtonEntity, {
-    position: Vector3.create(LOBBY_X, 1.5, LOBBY_Z),
-    scale: Vector3.create(1.2, 1.2, 1.2),
-  })
+  Transform.create(startButtonEntity, { position: Vector3.create(LOBBY_X, 1.5, LOBBY_Z) })
   MeshRenderer.setBox(startButtonEntity)
-  MeshCollider.setBox(startButtonEntity) // Collider is required for pointer events
-  Material.setPbrMaterial(startButtonEntity, {
-    albedoColor: Color4.create(0, 0.96, 1, 1),
-    emissiveColor: Color3.create(0, 0.96, 1),
-    emissiveIntensity: 5,
-    metallic: 0,
-    roughness: 0.2,
-  })
+  MeshCollider.setBox(startButtonEntity) // ⚠️ REQUIRED for pointer events!
+  
+  console.log('[Lobby] Start button entity created:', startButtonEntity)
 
-  console.log('[Lobby] Start button created, entity ID:', startButtonEntity)
-
-  // Make button clickable using pointerEventsSystem
+  // Register click handler BEFORE adding collider/material
   pointerEventsSystem.onPointerDown(
     {
       entity: startButtonEntity,
       opts: {
         button: InputAction.IA_POINTER,
         hoverText: 'START GAME',
-        maxDistance: 10,
-      },
+        maxDistance: 10
+      }
     },
     (event) => {
-      console.log('[Lobby] Start button clicked! Event:', event)
+      console.log('[Lobby] ✅ BUTTON CLICKED!', event)
       showModeSelection = true
     }
   )
-
-  console.log('[Lobby] Pointer event handler registered')
+  
+  console.log('[Lobby] Click handler registered')
+  
+  // Now add material
+  Material.setPbrMaterial(startButtonEntity, {
+    albedoColor: Color4.create(0, 0.96, 1, 1),
+    emissiveColor: Color3.create(0, 0.96, 1),
+    emissiveIntensity: 5,
+  })
 
   // Floating label
   const label = engine.addEntity()
