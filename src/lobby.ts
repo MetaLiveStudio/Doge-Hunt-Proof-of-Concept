@@ -12,6 +12,7 @@ import { GameState, setState } from './gameState'
 import { startGame } from './index'
 import { cleanupGame, resetGameState } from './gameReset'
 import { uiState } from './uiManager'
+import { hideHud } from './hud'
 
 // Lobby position
 const LOBBY_X = 8
@@ -133,4 +134,5 @@ export function returnToLobby(): void {
   setState(GameState.LOBBY)
   uiState.showModeSelection = false
   uiState.showGameOver = false
+  hideHud()
 }

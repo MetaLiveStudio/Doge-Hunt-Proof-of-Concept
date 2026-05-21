@@ -90,6 +90,15 @@ export function main() {
         time: timeStr,
       }
     },
+    getHudData: () => {
+      return {
+        bonks: totalBonks,
+        alive: aliveCount,
+        total: NPC_COUNT,
+        timeLeft: roundTimeLeft,
+        roundOver: roundOver,
+      }
+    },
   })
 
   // 3. Create lobby
