@@ -112,7 +112,7 @@ function setupLobbyUI(): void {
   // This function is called every frame by ReactEcsRenderer
   const uiComponent = () => {
     // Only show modal when button is clicked
-    if (!showModeSelection) return h('div', {})
+    if (!showModeSelection) return null
 
     return h(UiEntity, {
       uiTransform: {
