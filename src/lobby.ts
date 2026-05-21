@@ -5,6 +5,7 @@ import {
   engine, Entity, Transform,
   MeshRenderer, MeshCollider, Material,
   PointerEvents, PointerEventType, InputAction,
+  PointerEventsResult,
   TextShape, Billboard, BillboardMode,
 } from '@dcl/sdk/ecs'
 import { Vector3, Color3, Color4 } from '@dcl/sdk/math'
@@ -107,13 +108,10 @@ export function createLobby(): void {
 export function lobbySystem(): void {
   if (!startButtonEntity) return
 
-  const clicked = engine.getComponent(startButtonEntity, PointerEvents)
-  if (clicked) {
-    // Check if button was clicked this frame
-    const inputSystem = require('@dcl/sdk/ecs').inputSystem
-    if (inputSystem.isTriggered(InputAction.IA_POINTER, PointerEventType.PET_DOWN, startButtonEntity)) {
-      showModeSelection = true
-    }
+  // Check if button was clicked using PointerEventsResult
+  const result = PointerEventsResult.getOrNull(startButtonEntity)
+  if (result && result.hit && result.hit.entityId === startButtonEntity) {
+    showModeSelection = true
   }
 }
 
