@@ -4,11 +4,10 @@
 import {
   engine, Entity, Transform,
   MeshRenderer, MeshCollider, Material,
-  PointerEvents, PointerEventType, InputAction,
-  PointerEventsResult,
+  pointerEventsSystem, InputAction,
   TextShape, Billboard, BillboardMode,
 } from '@dcl/sdk/ecs'
-import { Vector3, Color3, Color4 } from '@dcl/sdk/math'
+import { Vector3, Color3, Color4, Quaternion } from '@dcl/sdk/math'
 import ReactEcs, { ReactEcsRenderer, UiEntity, Label, Button } from '@dcl/sdk/react-ecs'
 import { GameState, setState } from './gameState'
 import { startGame } from './index'
@@ -55,20 +54,21 @@ export function createLobby(): void {
     roughness: 0.2,
   })
 
-  // Make button clickable
-  PointerEvents.create(startButtonEntity, {
-    pointerEvents: [
-      {
-        eventType: PointerEventType.PET_DOWN,
-        eventInfo: {
-          button: InputAction.IA_POINTER,
-          hoverText: 'START GAME',
-          maxDistance: 10,
-          showFeedback: true,
-        },
+  // Make button clickable using pointerEventsSystem
+  pointerEventsSystem.onPointerDown(
+    {
+      entity: startButtonEntity,
+      opts: {
+        button: InputAction.IA_POINTER,
+        hoverText: 'START GAME',
+        maxDistance: 10,
       },
-    ],
-  })
+    },
+    () => {
+      console.log('[Lobby] Start button clicked!')
+      showModeSelection = true
+    }
+  )
 
   // Floating label
   const label = engine.addEntity()
@@ -102,20 +102,6 @@ export function createLobby(): void {
 
   // Setup UI
   setupLobbyUI()
-}
-
-/** Check for button clicks */
-export function lobbySystem(): void {
-  if (!startButtonEntity) return
-
-  // Check if button was clicked using PointerEventsResult
-  const result = PointerEventsResult.getOrNull(startButtonEntity)
-  if (result && result.hit) {
-    console.log('[Lobby] Start button clicked!')
-    showModeSelection = true
-    // Remove the result component so it doesn't trigger again
-    PointerEventsResult.deleteFrom(startButtonEntity)
-  }
 }
 
 /** Mode selection UI */

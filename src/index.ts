@@ -15,7 +15,7 @@
 import { engine } from '@dcl/sdk/ecs'
 
 import { GameState, isPlaying } from './gameState'
-import { createLobby, lobbySystem } from './lobby'
+import { createLobby } from './lobby'
 import { buildArena } from './arena'
 import { spawnAllNpcs, npcPatrolSystem, aliveCount } from './npc'
 import { combatSystem, totalBonks } from './combat'
@@ -75,9 +75,6 @@ export function main() {
 
   // 2. Setup game over UI
   setupGameOverUI()
-
-  // 2. Register lobby system
-  engine.addSystem(lobbySystem)
 
   // 3. Register game systems (only run when playing)
   engine.addSystem((dt: number) => {
