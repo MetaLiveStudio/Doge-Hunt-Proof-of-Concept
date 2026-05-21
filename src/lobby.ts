@@ -110,8 +110,11 @@ export function lobbySystem(): void {
 
   // Check if button was clicked using PointerEventsResult
   const result = PointerEventsResult.getOrNull(startButtonEntity)
-  if (result && result.hit && result.hit.entityId === startButtonEntity) {
+  if (result && result.hit) {
+    console.log('[Lobby] Start button clicked!')
     showModeSelection = true
+    // Remove the result component so it doesn't trigger again
+    PointerEventsResult.deleteFrom(startButtonEntity)
   }
 }
 
