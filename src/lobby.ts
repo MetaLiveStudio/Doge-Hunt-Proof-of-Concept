@@ -118,21 +118,28 @@ export function startSinglePlayer(): void {
 
 /** Return to lobby */
 export function returnToLobby(): void {
-  console.log('[Lobby] Returning to lobby...')
+  console.log('[Lobby] ========== RETURNING TO LOBBY ==========')
   
   // Clean up game entities
+  console.log('[Lobby] Step 1: Cleaning up game entities...')
   cleanupGame()
   
   // Reset game state variables
+  console.log('[Lobby] Step 2: Resetting game state...')
   resetGameState()
   
   // Teleport player back to lobby
+  console.log('[Lobby] Step 3: Teleporting player to lobby...')
   const playerTransform = Transform.getMutable(engine.PlayerEntity)
   playerTransform.position = Vector3.create(LOBBY_X, 0, LOBBY_Z)
+  console.log('[Lobby] Player position:', playerTransform.position)
 
   // Reset state
+  console.log('[Lobby] Step 4: Resetting UI state...')
   setState(GameState.LOBBY)
   uiState.showModeSelection = false
   uiState.showGameOver = false
   hideHud()
+  
+  console.log('[Lobby] ========== RETURN TO LOBBY COMPLETE ==========')
 }
