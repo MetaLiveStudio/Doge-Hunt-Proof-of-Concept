@@ -35,26 +35,26 @@
   },
   "spawnPoints": [
     {
-      "name": "spawn",
+      "name": "lobby",
       "default": true,
       "position": {
         "x": [
-          2,
-          4
+          7,
+          9
         ],
         "y": [
           0.1,
           0.1
         ],
         "z": [
-          2,
-          4
+          7,
+          9
         ]
       },
       "cameraTarget": {
-        "x": 24,
+        "x": 8,
         "y": 1.6,
-        "z": 24
+        "z": 8
       }
     }
   ],

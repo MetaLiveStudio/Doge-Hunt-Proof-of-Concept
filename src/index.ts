@@ -15,7 +15,7 @@
 import { engine } from '@dcl/sdk/ecs'
 
 import { GameState, isPlaying } from './gameState'
-import { createLobby } from './lobby'
+import { createLobby, startSinglePlayer, returnToLobby } from './lobby'
 import { buildArena } from './arena'
 import { spawnAllNpcs, npcPatrolSystem, aliveCount } from './npc'
 import { combatSystem, totalBonks } from './combat'
@@ -33,7 +33,8 @@ import {
 import { setupPlayerDisguise, dogeBodyEntity } from './player'
 import { setupSkills, skillSystem } from './skills'
 import { setupHud } from './hud'
-import { setupGameOverUI, showGameOverUI } from './gameOverUI'
+import { showGameOverUI } from './gameOverUI'
+import { setupUI, setCallbacks } from './uiManager'
 
 const NPC_COUNT = 12
 
@@ -70,13 +71,31 @@ export function startGame() {
 export function main() {
   console.log('Doge Hunt Proof of Concept loaded. Trust No Doge.')
 
-  // 1. Create lobby
+  // 1. Setup unified UI renderer
+  setupUI()
+  
+  // 2. Set UI callbacks
+  setCallbacks({
+    onStartSinglePlayer: startSinglePlayer,
+    onReturnToLobby: returnToLobby,
+    getGameStats: () => {
+      const survivalTime = 180 - roundTimeLeft
+      const m = Math.floor(survivalTime / 60)
+      const s = Math.floor(survivalTime % 60)
+      const timeStr = `${m}:${s < 10 ? '0' : ''}${s}`
+      return {
+        bonks: totalBonks,
+        alive: aliveCount,
+        total: NPC_COUNT,
+        time: timeStr,
+      }
+    },
+  })
+
+  // 3. Create lobby
   createLobby()
 
-  // 2. Setup game over UI
-  setupGameOverUI()
-
-  // 3. Register game systems (only run when playing)
+  // 4. Register game systems (only run when playing)
   engine.addSystem((dt: number) => {
     if (!isPlaying()) return
     npcPatrolSystem(dt)
@@ -97,7 +116,7 @@ export function main() {
     roundTimerSystem(dt)
   })
 
-  // 4. Skills init + system
+  // 5. Skills init + system
   engine.addSystem((dt: number) => {
     if (!isPlaying()) return
     if (!skillsInitialized && dogeBodyEntity) {
@@ -109,7 +128,7 @@ export function main() {
     }
   })
 
-  // 5. UI update system
+  // 6. UI update system
   let lastBonks = 0
   let lastAlive = NPC_COUNT
   engine.addSystem(() => {
@@ -124,7 +143,7 @@ export function main() {
     }
   })
 
-  // 6. Game over detection
+  // 7. Game over detection
   let gameOverTriggered = false
   engine.addSystem(() => {
     if (!isPlaying()) return

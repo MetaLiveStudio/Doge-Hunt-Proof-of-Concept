@@ -1,0 +1,125 @@
+{
+  "version": 1,
+  "skills": {
+    "add-3d-models": {
+      "source": "dcl-regenesislabs/opendcl",
+      "sourceType": "github",
+      "skillPath": "skills/add-3d-models/SKILL.md",
+      "computedHash": "b42ebdf3a214a4da9dbb002d6cde9cba1dcc2825ca725b4d0a6e8dd18697f7d3"
+    },
+    "add-interactivity": {
+      "source": "dcl-regenesislabs/opendcl",
+      "sourceType": "github",
+      "skillPath": "skills/add-interactivity/SKILL.md",
+      "computedHash": "97acf8f03389232969208fbc72f0c9dd9ba47e5aa8005def43bbad69f7ff2b86"
+    },
+    "advanced-input": {
+      "source": "dcl-regenesislabs/opendcl",
+      "sourceType": "github",
+      "skillPath": "skills/advanced-input/SKILL.md",
+      "computedHash": "d30e7f654be0bcdc5dfac32723c564e25f694d8a2b308b8a3a5c4fd042250aee"
+    },
+    "advanced-rendering": {
+      "source": "dcl-regenesislabs/opendcl",
+      "sourceType": "github",
+      "skillPath": "skills/advanced-rendering/SKILL.md",
+      "computedHash": "c7858e106004b4ec30f0543855b2a800d5788a4aa57c2c4fe496ff607d2d0a3d"
+    },
+    "animations-tweens": {
+      "source": "dcl-regenesislabs/opendcl",
+      "sourceType": "github",
+      "skillPath": "skills/animations-tweens/SKILL.md",
+      "computedHash": "e7764802cfe2fc7dfddd282f135e02b64dfa48879f0a7560901770b924fe6194"
+    },
+    "audio-video": {
+      "source": "dcl-regenesislabs/opendcl",
+      "sourceType": "github",
+      "skillPath": "skills/audio-video/SKILL.md",
+      "computedHash": "996693a78f960aa289707fccb1a5273f5265e17ec3ce663a8fb168ae8e75ad92"
+    },
+    "authoritative-server": {
+      "source": "dcl-regenesislabs/opendcl",
+      "sourceType": "github",
+      "skillPath": "skills/authoritative-server/SKILL.md",
+      "computedHash": "10da93ce977612b8dd625b59b8563c8e6fad3a601494e46fcaff750fcf136812"
+    },
+    "build-ui": {
+      "source": "dcl-regenesislabs/opendcl",
+      "sourceType": "github",
+      "skillPath": "skills/build-ui/SKILL.md",
+      "computedHash": "a7ab792cfd3431b5e7c873b52a6940b5f5c610e2422f5d0fd4ab4cdb9072a3a3"
+    },
+    "camera-control": {
+      "source": "dcl-regenesislabs/opendcl",
+      "sourceType": "github",
+      "skillPath": "skills/camera-control/SKILL.md",
+      "computedHash": "82ea68171a7264827ec55fa04fab07e52d57863bf9d1c861183767b8d07fc117"
+    },
+    "create-scene": {
+      "source": "dcl-regenesislabs/opendcl",
+      "sourceType": "github",
+      "skillPath": "skills/create-scene/SKILL.md",
+      "computedHash": "9e9ee906758539f9a6fb6a34fd63fe5280216940194e81f2debdeb679c162078"
+    },
+    "deploy-scene": {
+      "source": "dcl-regenesislabs/opendcl",
+      "sourceType": "github",
+      "skillPath": "skills/deploy-scene/SKILL.md",
+      "computedHash": "3f617c65a0e28596daa45edd648814e077c578f337f997e2212e5519d66443d0"
+    },
+    "deploy-worlds": {
+      "source": "dcl-regenesislabs/opendcl",
+      "sourceType": "github",
+      "skillPath": "skills/deploy-worlds/SKILL.md",
+      "computedHash": "a4be1134f64d7a40a52ac7518608377dbaf9e96f2cf10a2e431b9d3866e8094a"
+    },
+    "game-design": {
+      "source": "dcl-regenesislabs/opendcl",
+      "sourceType": "github",
+      "skillPath": "skills/game-design/SKILL.md",
+      "computedHash": "bdcd421da29d94c21fb4400fde058dbc551d24df8b29b38c45787d55a809d325"
+    },
+    "lighting-environment": {
+      "source": "dcl-regenesislabs/opendcl",
+      "sourceType": "github",
+      "skillPath": "skills/lighting-environment/SKILL.md",
+      "computedHash": "78507a09b52db34fea31600a87f2804a8b44e577b4727b58c5178b62d8bee6cf"
+    },
+    "multiplayer-sync": {
+      "source": "dcl-regenesislabs/opendcl",
+      "sourceType": "github",
+      "skillPath": "skills/multiplayer-sync/SKILL.md",
+      "computedHash": "522e8e0a254fa8cdc1e572b42f7ef31d732ac41cf3d683e540f59e3bf09c6ae6"
+    },
+    "nft-blockchain": {
+      "source": "dcl-regenesislabs/opendcl",
+      "sourceType": "github",
+      "skillPath": "skills/nft-blockchain/SKILL.md",
+      "computedHash": "1310ab2c021398ea5d2157d89dbd662c94ad9f6e5d62af65544794a57a88c7b4"
+    },
+    "optimize-scene": {
+      "source": "dcl-regenesislabs/opendcl",
+      "sourceType": "github",
+      "skillPath": "skills/optimize-scene/SKILL.md",
+      "computedHash": "99031d88d6f3b5789a2da909f0a3f7fd37009865a9109466d698e73982d25116"
+    },
+    "player-avatar": {
+      "source": "dcl-regenesislabs/opendcl",
+      "sourceType": "github",
+      "skillPath": "skills/player-avatar/SKILL.md",
+      "computedHash": "c3a8a4943164ebd9e2ccba36edadba2de11d3d526e85af87c7ca68e92ba1ff33"
+    },
+    "scene-runtime": {
+      "source": "dcl-regenesislabs/opendcl",
+      "sourceType": "github",
+      "skillPath": "skills/scene-runtime/SKILL.md",
+      "computedHash": "1d9f3865ec42a9335a85c02efe07dae8c41a5d871d0392808e2e720707ff3370"
+    },
+    "visual-feedback": {
+      "source": "dcl-regenesislabs/opendcl",
+      "sourceType": "github",
+      "skillPath": "skills/visual-feedback/SKILL.md",
+      "computedHash": "9068e5d8b49bd042e82afc3b97eec5f9f6a6ca323e82a165c3db453fc08055ef"
+    }
+  }
+}
