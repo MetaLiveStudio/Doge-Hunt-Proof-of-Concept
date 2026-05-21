@@ -45,7 +45,7 @@ export function createLobby(): void {
     scale: Vector3.create(1.2, 1.2, 1.2),
   })
   MeshRenderer.setBox(startButtonEntity)
-  MeshCollider.setBox(startButtonEntity)
+  MeshCollider.setBox(startButtonEntity) // Collider is required for pointer events
   Material.setPbrMaterial(startButtonEntity, {
     albedoColor: Color4.create(0, 0.96, 1, 1),
     emissiveColor: Color3.create(0, 0.96, 1),
@@ -53,6 +53,8 @@ export function createLobby(): void {
     metallic: 0,
     roughness: 0.2,
   })
+
+  console.log('[Lobby] Start button created, entity ID:', startButtonEntity)
 
   // Make button clickable using pointerEventsSystem
   pointerEventsSystem.onPointerDown(
@@ -64,11 +66,13 @@ export function createLobby(): void {
         maxDistance: 10,
       },
     },
-    () => {
-      console.log('[Lobby] Start button clicked!')
+    (event) => {
+      console.log('[Lobby] Start button clicked! Event:', event)
       showModeSelection = true
     }
   )
+
+  console.log('[Lobby] Pointer event handler registered')
 
   // Floating label
   const label = engine.addEntity()
@@ -106,8 +110,10 @@ export function createLobby(): void {
 
 /** Mode selection UI */
 function setupLobbyUI(): void {
+  // This function is called every frame by ReactEcsRenderer
   const uiComponent = () => {
-    if (!showModeSelection) return null
+    // Only show modal when button is clicked
+    if (!showModeSelection) return h('div', {})
 
     return h(UiEntity, {
       uiTransform: {
