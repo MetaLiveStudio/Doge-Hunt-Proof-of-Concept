@@ -129,87 +129,69 @@ function renderGameOverUI() {
   
   console.log('[UI] Rendering Game Over UI with stats:', stats)
   
+  // Modal Dialog pattern from OpenDCL build-ui skill
   return h(UiEntity, {
     uiTransform: {
       width: '100%',
       height: '100%',
-      display: 'flex',
-      flexDirection: 'column',
-      justifyContent: 'center',
+      positionType: 'absolute',
       alignItems: 'center',
+      justifyContent: 'center',
     },
-    uiBackground: { color: Color4.create(0, 0, 0, 0.9) },
+    uiBackground: { color: Color4.create(0, 0, 0, 0.8) },
   }, [
     h(UiEntity, {
       key: 'modal',
       uiTransform: {
-        width: 700,
-        height: 600,
-        display: 'flex',
+        width: 600,
+        height: 550,
         flexDirection: 'column',
         alignItems: 'center',
-        justifyContent: 'center',
-        padding: { top: 50, bottom: 50, left: 60, right: 60 },
+        padding: 40,
       },
-      uiBackground: { color: Color4.create(0.08, 0.08, 0.12, 0.98) },
+      uiBackground: { color: Color4.create(0.2, 0.2, 0.2, 1) },
     }, [
       h(Label, {
         key: 'title',
         value: 'GAME OVER',
-        fontSize: 52,
+        fontSize: 48,
         color: Color4.create(1, 0.2, 0.2, 1),
-        textAlign: 'middle-center',
-        uiTransform: { width: '100%', height: 70, margin: { bottom: 30 } },
+        uiTransform: { margin: { bottom: 20 } },
       }),
       h(Label, {
         key: 'subtitle',
         value: 'Round Complete',
+        fontSize: 24,
+        color: Color4.create(1, 0.84, 0, 1),
+        uiTransform: { margin: { bottom: 40 } },
+      }),
+      h(Label, {
+        key: 'bonks',
+        value: `Total Bonks: ${stats.bonks}`,
+        fontSize: 28,
+        color: Color4.create(0, 0.96, 1, 1),
+        uiTransform: { margin: { bottom: 15 } },
+      }),
+      h(Label, {
+        key: 'survived',
+        value: `Doges Remaining: ${stats.alive}/${stats.total}`,
+        fontSize: 28,
+        color: Color4.create(0.22, 1, 0.08, 1),
+        uiTransform: { margin: { bottom: 15 } },
+      }),
+      h(Label, {
+        key: 'time',
+        value: `Time: ${stats.time}`,
         fontSize: 28,
         color: Color4.create(1, 0.84, 0, 1),
-        textAlign: 'middle-center',
-        uiTransform: { width: '100%', height: 40, margin: { bottom: 50 } },
+        uiTransform: { margin: { bottom: 40 } },
       }),
-      h(UiEntity, {
-        key: 'stats',
-        uiTransform: {
-          width: '100%',
-          display: 'flex',
-          flexDirection: 'column',
-          alignItems: 'center',
-          margin: { bottom: 50 },
-        },
-      }, [
-        h(Label, {
-          key: 'bonks',
-          value: `Total Bonks: ${stats.bonks}`,
-          fontSize: 30,
-          color: Color4.create(0, 0.96, 1, 1),
-          textAlign: 'middle-center',
-          uiTransform: { width: '100%', height: 45, margin: { bottom: 20 } },
-        }),
-        h(Label, {
-          key: 'survived',
-          value: `Doges Remaining: ${stats.alive}/${stats.total}`,
-          fontSize: 30,
-          color: Color4.create(0.22, 1, 0.08, 1),
-          textAlign: 'middle-center',
-          uiTransform: { width: '100%', height: 45, margin: { bottom: 20 } },
-        }),
-        h(Label, {
-          key: 'time',
-          value: `Time: ${stats.time}`,
-          fontSize: 30,
-          color: Color4.create(1, 0.84, 0, 1),
-          textAlign: 'middle-center',
-          uiTransform: { width: '100%', height: 45 },
-        }),
-      ]),
       h(Button, {
         key: 'returnBtn',
         value: 'RETURN TO LOBBY',
         variant: 'primary',
-        uiTransform: { width: 400, height: 90, margin: { top: 20 } },
-        fontSize: 26,
+        fontSize: 22,
+        uiTransform: { width: 300, height: 60 },
         onMouseDown: () => {
           console.log('[UI] ========== BUTTON CLICKED ==========')
           console.log('[UI] uiState.showGameOver before:', uiState.showGameOver)
