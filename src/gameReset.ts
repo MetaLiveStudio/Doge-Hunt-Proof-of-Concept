@@ -6,6 +6,7 @@ import { engine, Entity } from '@dcl/sdk/ecs'
 import { NpcPatrol, NpcWaypoints, resetNpcCounters } from './npc'
 import { resetCombat } from './combat'
 import { resetRoundTimer } from './ui'
+import { resetGameOverFlag } from './index'
 
 let spawnedNpcs: Entity[] = []
 let arenaEntities: Entity[] = []
@@ -68,6 +69,7 @@ export function resetGameState(): void {
   resetCombat()
   resetNpcCounters()
   resetRoundTimer()
+  resetGameOverFlag()
   
   console.log('[Reset] State reset complete')
 }

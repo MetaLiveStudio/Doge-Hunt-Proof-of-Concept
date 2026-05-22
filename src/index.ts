@@ -40,6 +40,13 @@ const NPC_COUNT = 12
 
 let gameInitialized = false
 let skillsInitialized = false
+let gameOverTriggered = false
+
+/** Reset game over flag (called from gameReset) */
+export function resetGameOverFlag(): void {
+  gameOverTriggered = false
+  console.log('[Game] Game over flag reset')
+}
 
 /** Start the game (called from lobby) */
 export function startGame() {
@@ -153,7 +160,6 @@ export function main() {
   })
 
   // 7. Game over detection
-  let gameOverTriggered = false
   engine.addSystem(() => {
     if (!isPlaying()) return
     
@@ -163,6 +169,7 @@ export function main() {
     if (shouldEnd && !gameOverTriggered) {
       gameOverTriggered = true
       console.log('[Game] Game over! Reason:', roundOver ? 'Time up' : 'All NPCs eliminated')
+      console.log('[Game] Stats - Bonks:', totalBonks, 'Alive:', aliveCount, 'Time left:', roundTimeLeft)
       showGameOverUI()
     }
   })
