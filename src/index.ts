@@ -45,7 +45,9 @@ let gameOverTriggered = false
 /** Reset game over flag (called from gameReset) */
 export function resetGameOverFlag(): void {
   gameOverTriggered = false
-  console.log('[Game] Game over flag reset')
+  gameInitialized = false
+  skillsInitialized = false
+  console.log('[Game] Game flags reset (gameOver, gameInitialized, skillsInitialized)')
 }
 
 /** Start the game (called from lobby) */
