@@ -135,93 +135,26 @@ function renderGameOverUI() {
   
   console.log('[UI] Rendering Game Over UI with stats:', stats)
   
+  // Simplest possible centered UI - test if flexbox works at all
   return h(UiEntity, {
     uiTransform: {
       width: '100%',
       height: '100%',
       positionType: 'absolute',
       position: { left: 0, top: 0 },
+      display: 'flex',
       flexDirection: 'column',
       alignItems: 'center',
       justifyContent: 'center',
     },
-    uiBackground: { color: Color4.create(0, 0, 0, 0.85) },
+    uiBackground: { color: Color4.create(1, 0, 0, 0.5) },  // Red background to see if it covers screen
   }, [
-    h(UiEntity, {
-      key: 'modal',
-      uiTransform: {
-        width: 500,
-        height: 450,
-        flexDirection: 'column',
-        alignItems: 'center',
-        justifyContent: 'center',
-        padding: { top: 30, bottom: 30, left: 40, right: 40 },
-      },
-      uiBackground: { color: Color4.create(0.08, 0.08, 0.12, 0.95) },
-    }, [
-      h(Label, {
-        key: 'title',
-        value: 'GAME OVER',
-        fontSize: 36,
-        color: Color4.create(1, 0.2, 0.2, 1),
-        uiTransform: { height: 50, margin: { bottom: 20 } },
-      }),
-      h(Label, {
-        key: 'subtitle',
-        value: 'Round Complete',
-        fontSize: 20,
-        color: Color4.create(1, 0.84, 0, 1),
-        uiTransform: { height: 30, margin: { bottom: 30 } },
-      }),
-      h(Label, {
-        key: 'bonks',
-        value: `Total Bonks: ${stats.bonks}`,
-        fontSize: 22,
-        color: Color4.create(0, 0.96, 1, 1),
-        uiTransform: { height: 35, margin: { bottom: 10 } },
-      }),
-      h(Label, {
-        key: 'survived',
-        value: `Doges Remaining: ${stats.alive}/${stats.total}`,
-        fontSize: 22,
-        color: Color4.create(0.22, 1, 0.08, 1),
-        uiTransform: { height: 35, margin: { bottom: 10 } },
-      }),
-      h(Label, {
-        key: 'time',
-        value: `Time: ${stats.time}`,
-        fontSize: 22,
-        color: Color4.create(1, 0.84, 0, 1),
-        uiTransform: { height: 35, margin: { bottom: 30 } },
-      }),
-      h(Button, {
-        key: 'returnBtn',
-        value: 'RETURN TO LOBBY',
-        variant: 'primary',
-        uiTransform: { width: 300, height: 60 },
-        fontSize: 18,
-        onMouseDown: () => {
-          console.log('[UI] ========== BUTTON CLICKED ==========')
-          console.log('[UI] uiState.showGameOver before:', uiState.showGameOver)
-          console.log('[UI] onReturnToLobby callback exists:', !!onReturnToLobby)
-          
-          uiState.showGameOver = false
-          console.log('[UI] uiState.showGameOver after:', uiState.showGameOver)
-          
-          if (onReturnToLobby) {
-            console.log('[UI] Calling returnToLobby()...')
-            try {
-              onReturnToLobby()
-              console.log('[UI] returnToLobby() completed')
-            } catch (error) {
-              console.error('[UI] Error calling returnToLobby():', error)
-            }
-          } else {
-            console.error('[UI] onReturnToLobby callback is null!')
-          }
-        },
-      }),
-    ]),
+    h(Label, {
+      key: 'test',
+      value: 'GAME OVER - TEST',
+      fontSize: 48,
+      color: Color4.White(),
+    }),
   ])
 }
 
