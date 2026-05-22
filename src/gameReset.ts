@@ -7,6 +7,7 @@ import { NpcPatrol, NpcWaypoints, resetNpcCounters } from './npc'
 import { resetCombat } from './combat'
 import { resetRoundTimer } from './ui'
 import { resetGameOverFlag } from './index'
+import { cleanupPlayerDisguise } from './player'
 
 let spawnedNpcs: Entity[] = []
 let arenaEntities: Entity[] = []
@@ -57,6 +58,9 @@ export function cleanupGame(): void {
     engine.removeEntity(entity)
   }
   arenaEntities = []
+
+  // Clean up player disguise
+  cleanupPlayerDisguise()
 
   console.log('[Reset] Cleanup complete')
 }

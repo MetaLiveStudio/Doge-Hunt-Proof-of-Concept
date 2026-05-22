@@ -3,7 +3,7 @@
  * Hides the real player avatar, replaces with Muscledoge model (includes bat).
  */
 import {
-  engine, Transform,
+  engine, Transform, Entity,
   AvatarModifierArea, AvatarModifierType,
   GltfContainer,
 } from '@dcl/sdk/ecs'
@@ -16,11 +16,12 @@ const ARENA_SIZE = 44
 
 // Exported so skills.ts can reference it
 export let dogeBodyEntity: number = 0
+let modifierEntity: Entity | null = null
 
 /** Set up the player's Doge disguise */
 export function setupPlayerDisguise(): void {
   // 1. AvatarModifierArea — hides real player avatar in the arena only
-  const modifierEntity = engine.addEntity()
+  modifierEntity = engine.addEntity()
   Transform.create(modifierEntity, {
     position: Vector3.create(CX, 2, CZ),
   })
@@ -55,4 +56,23 @@ export function setupPlayerDisguise(): void {
     )
     dogeTransform.rotation = playerTransform.rotation
   })
+}
+
+/** Clean up player disguise (called when returning to lobby) */
+export function cleanupPlayerDisguise(): void {
+  console.log('[Player] Cleaning up player disguise...')
+  
+  // Remove AvatarModifierArea
+  if (modifierEntity) {
+    engine.removeEntity(modifierEntity)
+    modifierEntity = null
+  }
+  
+  // Remove Doge body
+  if (dogeBodyEntity) {
+    engine.removeEntity(dogeBodyEntity as Entity)
+    dogeBodyEntity = 0
+  }
+  
+  console.log('[Player] Player disguise cleaned up')
 }

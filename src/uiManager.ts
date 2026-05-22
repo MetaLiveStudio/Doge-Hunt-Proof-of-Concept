@@ -142,28 +142,28 @@ function renderGameOverUI() {
     h(UiEntity, {
       key: 'modal',
       uiTransform: {
-        width: 600,
-        height: 500,
+        width: 700,
+        height: 550,
         flexDirection: 'column',
         alignItems: 'center',
         justifyContent: 'center',
-        padding: { top: 40, bottom: 40, left: 50, right: 50 },
+        padding: { top: 50, bottom: 50, left: 60, right: 60 },
       },
       uiBackground: { color: Color4.create(0.08, 0.08, 0.12, 0.98) },
     }, [
       h(Label, {
         key: 'title',
         value: 'GAME OVER',
-        fontSize: 36,
+        fontSize: 48,
         color: Color4.create(1, 0.2, 0.2, 1),
-        uiTransform: { height: 50, margin: { bottom: 30 } },
+        uiTransform: { height: 60, margin: { bottom: 30 } },
       }),
       h(Label, {
         key: 'subtitle',
         value: 'Round Complete',
-        fontSize: 20,
+        fontSize: 24,
         color: Color4.create(1, 0.84, 0, 1),
-        uiTransform: { height: 30, margin: { bottom: 40 } },
+        uiTransform: { height: 35, margin: { bottom: 50 } },
       }),
       h(UiEntity, {
         key: 'stats',
@@ -171,37 +171,37 @@ function renderGameOverUI() {
           width: '100%',
           flexDirection: 'column',
           alignItems: 'center',
-          margin: { bottom: 40 },
+          margin: { bottom: 50 },
         },
       }, [
         h(Label, {
           key: 'bonks',
           value: `Total Bonks: ${stats.bonks}`,
-          fontSize: 22,
+          fontSize: 26,
           color: Color4.create(0, 0.96, 1, 1),
-          uiTransform: { height: 35, margin: { bottom: 15 } },
+          uiTransform: { height: 40, margin: { bottom: 15 } },
         }),
         h(Label, {
           key: 'survived',
           value: `Doges Remaining: ${stats.alive}/${stats.total}`,
-          fontSize: 22,
+          fontSize: 26,
           color: Color4.create(0.22, 1, 0.08, 1),
-          uiTransform: { height: 35, margin: { bottom: 15 } },
+          uiTransform: { height: 40, margin: { bottom: 15 } },
         }),
         h(Label, {
           key: 'time',
           value: `Time: ${stats.time}`,
-          fontSize: 22,
+          fontSize: 26,
           color: Color4.create(1, 0.84, 0, 1),
-          uiTransform: { height: 35 },
+          uiTransform: { height: 40 },
         }),
       ]),
       h(Button, {
         key: 'returnBtn',
         value: 'RETURN TO LOBBY',
         variant: 'primary',
-        uiTransform: { width: 350, height: 70 },
-        fontSize: 20,
+        uiTransform: { width: 400, height: 80 },
+        fontSize: 24,
         onMouseDown: () => {
           console.log('[UI] Return to lobby clicked')
           uiState.showGameOver = false
