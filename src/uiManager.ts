@@ -131,20 +131,16 @@ function renderGameOverUI() {
     uiTransform: {
       width: '100%',
       height: '100%',
-      positionType: 'absolute',
-      position: { left: '0%', top: '0%' },
       flexDirection: 'column',
-      alignItems: 'center',
       justifyContent: 'center',
+      alignItems: 'center',
     },
     uiBackground: { color: Color4.create(0, 0, 0, 0.9) },
   }, [
     h(UiEntity, {
       key: 'modal',
       uiTransform: {
-        width: '50%',
-        minWidth: 600,
-        maxWidth: 800,
+        width: 700,
         height: 600,
         flexDirection: 'column',
         alignItems: 'center',
@@ -202,7 +198,7 @@ function renderGameOverUI() {
         key: 'returnBtn',
         value: 'RETURN TO LOBBY',
         variant: 'primary',
-        uiTransform: { width: '80%', minWidth: 350, height: 90 },
+        uiTransform: { width: 400, height: 90 },
         fontSize: 26,
         onMouseDown: () => {
           console.log('[UI] Return to lobby button clicked')
