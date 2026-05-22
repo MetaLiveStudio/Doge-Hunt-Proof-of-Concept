@@ -385,12 +385,13 @@ function renderHUD() {
     ]),
   ])
 
-  // DEBUG: Kill All button (top-left corner)
+  // DEBUG: Kill All button (center-top)
   const debugButton = h(UiEntity, {
     key: 'debugButtonWrap',
     uiTransform: {
       positionType: 'absolute',
-      position: { left: 16, top: 16 },
+      position: { left: '50%', top: 20 },
+      margin: { left: -90 },  // Half of button width
     },
   }, [
     h(Button, {
