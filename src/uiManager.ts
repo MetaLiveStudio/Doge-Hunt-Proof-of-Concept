@@ -135,25 +135,68 @@ function renderGameOverUI() {
   
   console.log('[UI] Rendering Game Over UI with stats:', stats)
   
-  // Simplest possible centered UI - test if flexbox works at all
   return h(UiEntity, {
     uiTransform: {
-      width: '100%',
-      height: '100%',
+      width: 600,
+      height: 500,
       positionType: 'absolute',
-      position: { left: 0, top: 0 },
-      display: 'flex',
+      position: { left: '50%', top: '50%' },
+      margin: { left: -300, top: -250 },  // Half of width and height to center
       flexDirection: 'column',
       alignItems: 'center',
       justifyContent: 'center',
+      padding: 40,
     },
-    uiBackground: { color: Color4.create(1, 0, 0, 0.5) },  // Red background to see if it covers screen
+    uiBackground: { color: Color4.create(0.08, 0.08, 0.12, 0.95) },
   }, [
     h(Label, {
-      key: 'test',
-      value: 'GAME OVER - TEST',
+      key: 'title',
+      value: 'GAME OVER',
       fontSize: 48,
-      color: Color4.White(),
+      color: Color4.create(1, 0.2, 0.2, 1),
+      uiTransform: { margin: { bottom: 20 } },
+    }),
+    h(Label, {
+      key: 'subtitle',
+      value: 'Round Complete',
+      fontSize: 24,
+      color: Color4.create(1, 0.84, 0, 1),
+      uiTransform: { margin: { bottom: 30 } },
+    }),
+    h(Label, {
+      key: 'bonks',
+      value: `Total Bonks: ${stats.bonks}`,
+      fontSize: 26,
+      color: Color4.create(0, 0.96, 1, 1),
+      uiTransform: { margin: { bottom: 15 } },
+    }),
+    h(Label, {
+      key: 'survived',
+      value: `Doges Remaining: ${stats.alive}/${stats.total}`,
+      fontSize: 26,
+      color: Color4.create(0.22, 1, 0.08, 1),
+      uiTransform: { margin: { bottom: 15 } },
+    }),
+    h(Label, {
+      key: 'time',
+      value: `Time: ${stats.time}`,
+      fontSize: 26,
+      color: Color4.create(1, 0.84, 0, 1),
+      uiTransform: { margin: { bottom: 30 } },
+    }),
+    h(Button, {
+      key: 'returnBtn',
+      value: 'RETURN TO LOBBY',
+      variant: 'primary',
+      uiTransform: { width: 350, height: 70 },
+      fontSize: 22,
+      onMouseDown: () => {
+        console.log('[UI] ========== BUTTON CLICKED ==========')
+        uiState.showGameOver = false
+        if (onReturnToLobby) {
+          onReturnToLobby()
+        }
+      },
     }),
   ])
 }
