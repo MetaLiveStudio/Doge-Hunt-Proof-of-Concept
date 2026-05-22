@@ -127,10 +127,13 @@ function renderModeSelectionUI() {
 function renderGameOverUI() {
   const stats = getGameStats ? getGameStats() : { bonks: 0, alive: 0, total: 12, time: '0:00' }
   
+  console.log('[UI] Rendering Game Over UI with stats:', stats)
+  
   return h(UiEntity, {
     uiTransform: {
       width: '100%',
       height: '100%',
+      display: 'flex',
       flexDirection: 'column',
       justifyContent: 'center',
       alignItems: 'center',
@@ -142,6 +145,7 @@ function renderGameOverUI() {
       uiTransform: {
         width: 700,
         height: 600,
+        display: 'flex',
         flexDirection: 'column',
         alignItems: 'center',
         justifyContent: 'center',
@@ -154,19 +158,22 @@ function renderGameOverUI() {
         value: 'GAME OVER',
         fontSize: 52,
         color: Color4.create(1, 0.2, 0.2, 1),
-        uiTransform: { height: 70, margin: { bottom: 30 } },
+        textAlign: 'middle-center',
+        uiTransform: { width: '100%', height: 70, margin: { bottom: 30 } },
       }),
       h(Label, {
         key: 'subtitle',
         value: 'Round Complete',
         fontSize: 28,
         color: Color4.create(1, 0.84, 0, 1),
-        uiTransform: { height: 40, margin: { bottom: 50 } },
+        textAlign: 'middle-center',
+        uiTransform: { width: '100%', height: 40, margin: { bottom: 50 } },
       }),
       h(UiEntity, {
         key: 'stats',
         uiTransform: {
           width: '100%',
+          display: 'flex',
           flexDirection: 'column',
           alignItems: 'center',
           margin: { bottom: 50 },
@@ -177,35 +184,48 @@ function renderGameOverUI() {
           value: `Total Bonks: ${stats.bonks}`,
           fontSize: 30,
           color: Color4.create(0, 0.96, 1, 1),
-          uiTransform: { height: 45, margin: { bottom: 20 } },
+          textAlign: 'middle-center',
+          uiTransform: { width: '100%', height: 45, margin: { bottom: 20 } },
         }),
         h(Label, {
           key: 'survived',
           value: `Doges Remaining: ${stats.alive}/${stats.total}`,
           fontSize: 30,
           color: Color4.create(0.22, 1, 0.08, 1),
-          uiTransform: { height: 45, margin: { bottom: 20 } },
+          textAlign: 'middle-center',
+          uiTransform: { width: '100%', height: 45, margin: { bottom: 20 } },
         }),
         h(Label, {
           key: 'time',
           value: `Time: ${stats.time}`,
           fontSize: 30,
           color: Color4.create(1, 0.84, 0, 1),
-          uiTransform: { height: 45 },
+          textAlign: 'middle-center',
+          uiTransform: { width: '100%', height: 45 },
         }),
       ]),
       h(Button, {
         key: 'returnBtn',
         value: 'RETURN TO LOBBY',
         variant: 'primary',
-        uiTransform: { width: 400, height: 90 },
+        uiTransform: { width: 400, height: 90, margin: { top: 20 } },
         fontSize: 26,
         onMouseDown: () => {
-          console.log('[UI] Return to lobby button clicked')
+          console.log('[UI] ========== BUTTON CLICKED ==========')
+          console.log('[UI] uiState.showGameOver before:', uiState.showGameOver)
+          console.log('[UI] onReturnToLobby callback exists:', !!onReturnToLobby)
+          
           uiState.showGameOver = false
+          console.log('[UI] uiState.showGameOver after:', uiState.showGameOver)
+          
           if (onReturnToLobby) {
-            console.log('[UI] Calling returnToLobby callback...')
-            onReturnToLobby()
+            console.log('[UI] Calling returnToLobby()...')
+            try {
+              onReturnToLobby()
+              console.log('[UI] returnToLobby() completed')
+            } catch (error) {
+              console.error('[UI] Error calling returnToLobby():', error)
+            }
           } else {
             console.error('[UI] onReturnToLobby callback is null!')
           }
