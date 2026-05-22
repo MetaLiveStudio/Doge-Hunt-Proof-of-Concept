@@ -385,6 +385,28 @@ function renderHUD() {
     ]),
   ])
 
+  // DEBUG: Kill All button (top-left corner)
+  const debugButton = h(UiEntity, {
+    key: 'debugButtonWrap',
+    uiTransform: {
+      positionType: 'absolute',
+      position: { left: 16, top: 16 },
+    },
+  }, [
+    h(Button, {
+      key: 'killAllBtn',
+      value: 'KILL ALL (DEBUG)',
+      variant: 'secondary',
+      uiTransform: { width: 180, height: 50 },
+      fontSize: 14,
+      onMouseDown: () => {
+        console.log('[DEBUG] Kill All button clicked')
+        const { killAllNpcs } = require('./npc')
+        killAllNpcs()
+      },
+    }),
+  ])
+
   return h(UiEntity, {
     uiTransform: {
       width: '100%',
@@ -392,5 +414,5 @@ function renderHUD() {
       positionType: 'absolute',
       position: { left: 0, top: 0 },
     },
-  }, [panel, eKeyHint])
+  }, [panel, eKeyHint, debugButton])
 }

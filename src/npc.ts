@@ -164,6 +164,37 @@ export function decrementAlive(): void {
   aliveCount = Math.max(0, aliveCount - 1)
 }
 
+/** DEBUG: Kill all NPCs instantly */
+export function killAllNpcs(): void {
+  console.log('[DEBUG] Killing all NPCs...')
+  for (const [entity] of engine.getEntitiesWith(NpcPatrol, Transform)) {
+    const patrol = NpcPatrol.getMutable(entity)
+    if (patrol.isKnockedOut) continue
+    
+    // Mark as dead
+    patrol.isKnockedOut = true
+    patrol.knockoutTimer = -1
+    
+    // Swap model
+    if (patrol.visualEntity) {
+      const gltf = GltfContainer.getMutable(patrol.visualEntity as Entity)
+      gltf.src = DEAD_DOGE_MODEL
+      const visualTransform = Transform.getMutable(patrol.visualEntity as Entity)
+      visualTransform.scale = NPC_DEAD_VISUAL_SCALE
+    }
+    
+    // Update label
+    if (patrol.labelEntity) {
+      const labelText = TextShape.getMutable(patrol.labelEntity as Entity)
+      labelText.text = 'ELIMINATED'
+    }
+    
+    // Decrement counter
+    aliveCount = Math.max(0, aliveCount - 1)
+  }
+  console.log('[DEBUG] All NPCs killed. Alive count:', aliveCount)
+}
+
 /** NPC patrol system — moves NPCs between waypoints, updates label position */
 export function npcPatrolSystem(dt: number): void {
   for (const [entity] of engine.getEntitiesWith(NpcPatrol, NpcWaypoints, Transform)) {
