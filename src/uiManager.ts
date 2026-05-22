@@ -36,19 +36,25 @@ export function setupUI(): void {
   console.log('[UI] Setting up unified UI renderer...')
   
   const uiComponent = () => {
+    console.log('[UI] Rendering... showGameOver:', uiState.showGameOver, 'showModeSelection:', uiState.showModeSelection, 'showHud:', uiState.showHud)
+    
     // Priority: Game Over > Mode Selection > HUD
     if (uiState.showGameOver) {
+      console.log('[UI] Returning Game Over UI')
       return renderGameOverUI()
     }
     
     if (uiState.showModeSelection) {
+      console.log('[UI] Returning Mode Selection UI')
       return renderModeSelectionUI()
     }
     
     if (uiState.showHud) {
+      console.log('[UI] Returning HUD')
       return renderHUD()
     }
     
+    console.log('[UI] Returning null (no UI)')
     return null
   }
 
