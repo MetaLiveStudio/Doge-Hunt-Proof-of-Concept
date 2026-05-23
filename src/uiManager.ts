@@ -201,6 +201,7 @@ function renderGameOverUI() {
       positionType: 'absolute',
       position: { left: 0, top: 0 },
     },
+    uiBackground: { color: Color4.create(1, 0, 0, 0.3) },  // DEBUG: red tint to see container
   }, [modal])
 }
 
