@@ -127,7 +127,8 @@ function renderModeSelectionUI() {
 function renderGameOverUI() {
   const stats = getGameStats ? getGameStats() : { bonks: 0, alive: 0, total: 12, time: '0:00' }
   
-  return h(UiEntity, {
+  const modal = h(UiEntity, {
+    key: 'gameOverModal',
     uiTransform: {
       width: 600,
       height: 500,
@@ -191,6 +192,16 @@ function renderGameOverUI() {
       },
     }),
   ])
+  
+  // Wrap in fullscreen container (like HUD does)
+  return h(UiEntity, {
+    uiTransform: {
+      width: '100%',
+      height: '100%',
+      positionType: 'absolute',
+      position: { left: 0, top: 0 },
+    },
+  }, [modal])
 }
 
 /** Render HUD (in-game stats and instructions) */
