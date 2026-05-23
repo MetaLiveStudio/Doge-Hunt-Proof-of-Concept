@@ -193,7 +193,10 @@ function renderGameOverUI() {
         uiTransform: { width: '100%', height: '100%' },
         fontSize: 22,
         onMouseDown: () => {
-          console.log('[UI] ========== BUTTON CLICKED ==========')
+          console.log('[UI] ========== BUTTON MOUSE DOWN ==========')
+        },
+        onMouseUp: () => {
+          console.log('[UI] ========== BUTTON MOUSE UP ==========')
           console.log('[UI] onReturnToLobby exists?', !!onReturnToLobby)
           uiState.showGameOver = false
           if (onReturnToLobby) {
