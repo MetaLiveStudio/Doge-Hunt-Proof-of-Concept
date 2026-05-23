@@ -132,9 +132,6 @@ function renderGameOverUI() {
     uiTransform: {
       width: 600,
       height: 500,
-      positionType: 'absolute',
-      position: { left: '50%', top: '50%' },
-      margin: { left: -300, top: -250 },  // Half of width and height to center
       flexDirection: 'column',
       alignItems: 'center',
       justifyContent: 'center',
@@ -198,15 +195,18 @@ function renderGameOverUI() {
     }),
   ])
   
-  // Wrap in fullscreen container (like HUD does)
+  // Wrap in fullscreen container (like Mode Selection does)
   return h(UiEntity, {
     uiTransform: {
       width: '100%',
       height: '100%',
       positionType: 'absolute',
       position: { left: 0, top: 0 },
+      flexDirection: 'column',
+      alignItems: 'center',
+      justifyContent: 'center',
     },
-    uiBackground: { color: Color4.create(1, 0, 0, 0.3) },  // DEBUG: red tint to see container
+    uiBackground: { color: Color4.create(0, 0, 0, 0.85) },  // Semi-transparent black background
   }, [modal])
 }
 
