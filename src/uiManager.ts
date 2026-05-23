@@ -181,13 +181,18 @@ function renderGameOverUI() {
       key: 'returnBtn',
       value: 'RETURN TO LOBBY',
       variant: 'primary',
-      uiTransform: { width: 350, height: 70 },
+      uiTransform: { width: 350, height: 70, margin: { top: 10 } },
       fontSize: 22,
+      disabled: false,  // Explicitly enable
       onMouseDown: () => {
         console.log('[UI] ========== BUTTON CLICKED ==========')
+        console.log('[UI] onReturnToLobby exists?', !!onReturnToLobby)
         uiState.showGameOver = false
         if (onReturnToLobby) {
+          console.log('[UI] Calling onReturnToLobby...')
           onReturnToLobby()
+        } else {
+          console.log('[UI] ERROR: onReturnToLobby is null!')
         }
       },
     }),
