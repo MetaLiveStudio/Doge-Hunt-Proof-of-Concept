@@ -190,7 +190,11 @@ function renderGameOverUI() {
         key: 'returnBtn',
         value: 'RETURN TO LOBBY',
         variant: 'primary',
-        uiTransform: { width: '100%', height: '100%' },
+        uiTransform: { 
+          width: '100%', 
+          height: '100%',
+          padding: 20,  // Add padding like official example
+        },
         fontSize: 22,
         onMouseDown: () => {
           console.log('[UI] ========== BUTTON MOUSE DOWN ==========')
