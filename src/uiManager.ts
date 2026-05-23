@@ -221,6 +221,7 @@ function renderGameOverUI() {
       height: '100%',
       positionType: 'absolute',
       position: { left: 0, top: 0 },
+      pointerFilter: 'block',  // Allow clicks to pass through to children
     },
     uiBackground: { color: Color4.create(1, 0, 0, 0.3) },  // DEBUG: red tint to see container
   }, [modal])
