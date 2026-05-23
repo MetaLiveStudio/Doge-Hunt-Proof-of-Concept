@@ -177,25 +177,34 @@ function renderGameOverUI() {
       color: Color4.create(1, 0.84, 0, 1),
       uiTransform: { margin: { bottom: 30 } },
     }),
-    h(Button, {
-      key: 'returnBtn',
-      value: 'RETURN TO LOBBY',
-      variant: 'primary',
-      uiTransform: { width: 350, height: 70, margin: { top: 10 } },
-      fontSize: 22,
-      disabled: false,  // Explicitly enable
-      onMouseDown: () => {
-        console.log('[UI] ========== BUTTON CLICKED ==========')
-        console.log('[UI] onReturnToLobby exists?', !!onReturnToLobby)
-        uiState.showGameOver = false
-        if (onReturnToLobby) {
-          console.log('[UI] Calling onReturnToLobby...')
-          onReturnToLobby()
-        } else {
-          console.log('[UI] ERROR: onReturnToLobby is null!')
-        }
+    // Wrap button in UiEntity to ensure click events work
+    h(UiEntity, {
+      key: 'buttonWrapper',
+      uiTransform: {
+        width: 350,
+        height: 70,
+        margin: { top: 10 },
       },
-    }),
+    }, [
+      h(Button, {
+        key: 'returnBtn',
+        value: 'RETURN TO LOBBY',
+        variant: 'primary',
+        uiTransform: { width: '100%', height: '100%' },
+        fontSize: 22,
+        onMouseDown: () => {
+          console.log('[UI] ========== BUTTON CLICKED ==========')
+          console.log('[UI] onReturnToLobby exists?', !!onReturnToLobby)
+          uiState.showGameOver = false
+          if (onReturnToLobby) {
+            console.log('[UI] Calling onReturnToLobby...')
+            onReturnToLobby()
+          } else {
+            console.log('[UI] ERROR: onReturnToLobby is null!')
+          }
+        },
+      }),
+    ]),
   ])
   
   // Wrap in fullscreen container (like HUD does)
