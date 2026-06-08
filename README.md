@@ -1,154 +1,70 @@
-# Doge Hunt — MVP Scene
+# Doge Hunt - Decentraland Mobile Game
 
-Trust No Doge. A social deduction game demo for Decentraland Worlds (SDK7).
+**Doge Hunt** is a social deduction game developed using Decentraland SDK7, specifically optimized for the mobile client.
 
-## What's in this demo
+> **Core Objective**: Create a gaming experience tailored for the Decentraland mobile app, rather than a generic web-based experience.
 
-- **Neon-noir arena**: Dark floor with cyan grid, glowing walls, 7 pillars, corridor obstacles
-- **12 NPC Doges**: Identical avatars patrolling random waypoints with "NPC or Player?" labels
-- **Click-to-bonk**: Click any NPC within range → knockback + permanent knockout
-- **Kill feed**: Meme-style floating messages ("Such eliminate. Very dead. Wow.")
-- **HUD**: Bonk counter, alive counter, round timer (3 min) + instructions
-- **Player disguise**: You appear as a Doge to other players
-- **Rock Solid skill**: Press E near a pillar to hide
+## Core Rules
 
-## Setup
+All AI agents, developers, and contributors must adhere to the following rules:
 
-```bash
-# 1. Install dependencies
-npm install
+1. **Task Logging Requirement**:
+   - A `tasks.md` file must be maintained in the project root.
+   - **Before starting any new task**, you must read and understand the history and current plans in `tasks.md`.
+   - **Upon completing a task**, you must immediately update `tasks.md` with the task description, status, and follow-up plans.
+2. **Preview Mode Restriction**:
+   - **Strictly no unauthorized use of preview mode**. All previewing and verification are handled manually by designated personnel.
 
-# 2. Start local preview
-npm start
-```
+## Current Features
 
-This opens a browser preview at `http://localhost:8000`. Walk around the arena and click Doges to bonk them.
+- **Mobile Optimization**: UI and interactions designed for small screens and touch controls.
+- **Muscledoge Animation System**: Full animation set support (idel, walk, run, jump, Bonk).
+- **Melee Combat System**: Uses forward hit detection with support for combo interruption and rhythm tuning.
+- **Humanized NPCs**: NPCs feature random state machine behaviors (patrol, pause, jump, attack) and perfect ground alignment.
+- **Third-Person Camera**: A smooth follow-camera system specifically tuned for mobile devices.
+- **Environment System**: Reuses `MoonLobby1.glb` as the Arena base, supporting runtime instantiation and cleanup.
 
-## Project structure
+## Project Structure
 
 ```
 src/
-  index.ts    — Entry point, bootstraps all systems
-  arena.ts    — Arena geometry (floor, walls, pillars, neon strips)
-  npc.ts      — NPC spawning, patrol component + system
-  combat.ts   — Hit detection, knockback, knockout, kill messages
-  ui.ts       — Kill feed, welcome sign, HUD overlay
-  player.ts   — Player disguise system
-  skills.ts   — Rock Solid skill (press E to hide near pillars)
-  hud.ts      — Game HUD setup
+  index.ts        — Entry point, initializes all systems
+  arena.ts        — Arena generation logic (based on MoonLobby1.glb)
+  lobby.ts        — Lobby environment management
+  npc.ts          — NPC spawning, patrol state machine, and animation management
+  player.ts       — Player appearance, movement follow, and animation sync
+  combat.ts       — Melee hit detection and kill logic
+  cameraRig.ts    — Third-person smooth camera system
+  uiManager.ts    — Core UI logic and React-ECS interface
+  gameState.ts    — Global game state management
+  gameReset.ts    — Game reset and entity cleanup logic
+  hud.ts          — In-game HUD interface
+  skills.ts       — Skill system (e.g., Rock Solid)
+  ui.ts / gameOverUI.ts — Auxiliary UI components
 ```
 
-## Requirements
+## Technical Specifications
 
-- Node.js 18+
-- Decentraland SDK7: `@dcl/sdk ^7.6.0`
-- `@dcl-sdk/utils ^1.2.0`
+- **SDK Version**: Decentraland SDK7 (ECS7)
+- **UI Framework**: `@dcl/react-ecs`
+- **Performance Optimization**:
+  - Strictly control the number of entities.
+  - Texture sizes recommended to be no larger than 512x512.
+  - Avoid high-overhead calculations in every frame (Systems).
 
-## Scene config
+## Development Guide
 
-- **Parcels**: 3×3 (48m × 48m)
-- **Spawn**: Near southwest corner, facing center
-
-## Customization
-
-### Change NPC count
-
-In `src/index.ts`, change `spawnAllNpcs(12)` to any number (4-16 recommended).
-
-### Change NPC speed
-
-In `src/npc.ts`, adjust the speed range in `spawnNpc()`:
-
-```typescript
-speed: 1.0 + Math.random() * 0.8  // 1.0 - 1.8 m/s
+### Install Dependencies
+```bash
+npm install
 ```
 
-### Change arena colors
+### Start Development (Compilation Check Only)
+```bash
+# Note: Per Core Rules, do not view the preview interface without authorization
+npm start
+```
 
-In `src/arena.ts`, modify the color constants at the top of the file.
+## Task Tracking
 
-### Add Doge wearables
-
-When you have custom Doge wearable URNs, update the `DOGE_WEARABLES` array in `src/npc.ts`.
-
-## Next steps (Phase 1 → full game)
-
-### PHASE 1 — NETWORKING & CORE GAMEPLAY
-
-**Networking**
-
-- Colyseus server + room management
-- PlayFab auth
-- Server-authoritative attack validation
-- Basic NPC/Player sync
-
-**Game Flow**
-
-- Lobby: waiting for players to join (configurable min players 2-8)
-- Player/NPC ratio settings: balanced mode, many impostors mode, etc.
-- Countdown: 10s countdown before round starts
-- Active: main gameplay phase (3 min default, configurable)
-- Results: ranking & score display
-
-**Spectator Mode**
-
-- Dead players become spectators
-
-  <br />
-
-### PHASE 2 — CONTENT ENHANCEMENT
-
-**Art**&#x20;
-
-- Doge model: walk/swing/death animations
-- Model enhancement
-- Hit sparks, elimination effects
-
-**UI**
-
-- HUD: timer, alive count, kill feed
-- Lobby screen with player list
-- Round start countdown overlay
-- Results screen: ranking, bonks, time survived, score breakdown
-
-**Skills (pickup-based, below are examples)**
-
-- Rock Solid: hide as scene object (5s)
-- X-Ray Vision: reveal nearby players (3s)
-- Play Dead: fake death (3s)
-- Dash: speed burst
-
-### PHASE 3 — PROGRESSION & LAUNCH
-
-**Audio**
-
-- BONK sound, countdown, ambient sound
-
-**Long term game economy**
-
-- Leaderboards
-
-**Wearable Rewards**
-
-- Milestone wearables
-
-**Mobile Adaptation**
-
-- Touch-friendly UI scaling for small screens
-- Tap-to-bonk design
-- HUD repositioning for portrait/landscape
-
-**Testing**
-
-- Unit tests for game logic (combat, scoring, round flow)
-- Integration tests for Colyseus sync
-- Load testing with bot players
-- Cross-browser & mobile device testing
-
-**Optimization**
-
-- Entity culling for distant NPCs
-- Network traffic minimization
-- Memory profiling & leak detection
-- FPS optimization (target 60fps on mid-range devices)
-
+Always refer to and update the [tasks.md](tasks.md) file in the project root for the latest task progress and to-do items.

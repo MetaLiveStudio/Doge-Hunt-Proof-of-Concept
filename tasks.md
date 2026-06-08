@@ -1,132 +1,31 @@
 # Doge Hunt Task Log
 
-本文档用于记录 Doge Hunt 项目的所有开发任务及其进度。
+This document records all development tasks and progress for the Doge Hunt project.
 
-## 任务历史
+## Task History
 
-| 日期 | 任务描述 | 状态 | 执行者 | 备注 |
+| Date | Task Description | Status | Executor | Notes |
 | :--- | :--- | :--- | :--- | :--- |
-| 2026-06-02 | 更新项目 Rules 并建立任务记录机制 | 已完成 | AI Assistant | 增加了技术规范，明确了 `tasks.md` 的更新规则，并要求在开启新任务前必须阅读该文件。 |
-| 2026-06-02 | 第一轮 POC 扫描与结构整理规划 | 已完成 | AI Assistant | 扫描了项目结构、主循环、UI、状态流，提出先收口 `uiManager.ts` 与状态管理的整理方案。 |
-| 2026-06-02 | 近战玩法从点选改为前方命中判定 | 已完成 | AI Assistant | 去掉“点中 NPC 即死”，改为点屏出拳、前方短窗口命中；同步移除 NPC 上旧的直接点击击杀入口。 |
-| 2026-06-02 | 玩家 Doge 外观、相机与移动跟随调校 | 已完成 | AI Assistant | 玩家默认静止站立；加入追尾第三人称相机；狗替身跟随玩家高度与朝向；角色转向改为限速旋转。 |
-| 2026-06-02 | NPC 场地贴合与命中手感调校 | 已完成 | AI Assistant | NPC 巡逻改为按地表采样贴地；放大 NPC 命中体积与前方攻击范围；击杀延迟调至约 `0.25s`。 |
-| 2026-06-02 | 玩家动画系统升级到新版 Muscledoge 动画集 | 已完成 | AI Assistant | 接入 `idle / walk / run / jump / Bonk`；修正跑步修饰键从 `IA_WALK` 到 `IA_MODIFIER`；完善动作优先级与待机回退。 |
-| 2026-06-02 | 玩家真实移动速度接入与参数联调 | 已完成 | AI Assistant | 接入 `AvatarLocomotionSettings`；当前速度参数为 `walk=6`、`jog=6`、`run=10`；返回 Lobby 时恢复默认。 |
-| 2026-06-02 | 跳跃与攻击动画节奏联调 | 已完成 | AI Assistant | `Bonk` 动画提速约 30%；`jump` 改为原速播放并通过调整持续时间对齐；当前 `jump` 时长为 `1.3s`。 |
-| 2026-06-02 | NPC 人类化动作状态机首版接入 | 已完成 | AI Assistant | 为 NPC 接入 `idle / walk / run / jump / Bonk` 动作状态机；按与 waypoint 的距离动态随机切换动作；补齐动画同步与跳跃视觉偏移；击杀时重置死亡模型局部位移，避免空中死亡残留。 |
-| 2026-06-02 | NPC 速度与玩家对齐，并补击杀前压扁动画 | 已完成 | AI Assistant | 将 NPC 的 `walk/run` 真实移动速度直接对齐到玩家 `walk=6`、`run=10`；命中后先进入短暂贴地压扁阶段，再切换 `SmallDoge` 死亡模型并播放死亡动画。 |
-| 2026-06-02 | 修复 NPC 压扁后死亡 Animator 状态异常 | 已完成 | AI Assistant | 根因是切到 `SmallDoge` 后复用了旧 `Animator`，导致访问不存在的 `Animation` state 并打断 update loop；改为先删除旧 `Animator` 再创建仅含死亡 clip 的新状态。 |
-| 2026-06-02 | 拉长 NPC 压扁阶段并加大压缩幅度 | 已完成 | AI Assistant | 将压扁时长从 `0.18s` 提到 `0.32s`，最小高度比例从 `0.12` 降到 `0.08`，横向鼓开从 `1.22x` 提到 `1.3x`，让击杀前的拍扁更容易被看见。 |
-| 2026-06-02 | 按试玩反馈继续拉长 NPC 压扁阶段 | 已完成 | AI Assistant | 根据反馈将压扁时长进一步调整到 `0.5s`，并将最小高度比例设为 `10%`，让“拍扁”过程在第三人称视角下更清晰。 |
-| 2026-06-02 | 继续微调 NPC 压扁最低高度 | 已完成 | AI Assistant | 根据反馈将压扁最低高度从 `10%` 调整到 `20%`，保留 `0.5s` 时长与 `1.3x` 横向鼓开，避免压得过狠导致形体过薄。 |
-| 2026-06-02 | 增强 NPC 压扁的重量感 | 已完成 | AI Assistant | 保持 `0.5s` 时长与 `20%` 最低高度不变，将横向鼓开从 `1.3x` 提到 `1.35x`，让拍扁时更有体块外扩和下压重量感。 |
-| 2026-06-02 | 复查新版 Muscledoge 模型动画命名与时长 | 已完成 | AI Assistant | 直接解析 `models/Muscledoge.glb`，确认共有 `13` 个动画；当前项目用到的 `Bonk / jump / run / walk` 仍存在，但 `idle` 被改名为 `idel`；对应原始时长约为 `Bonk=2.3s`、`jump=1.933s`、`run=0.567s`、`walk=1.067s`、`idel=1.867s`。 |
-| 2026-06-02 | 按新版 Muscledoge 动画集同步项目 clip 与时长 | 已完成 | AI Assistant | 将玩家与 NPC 的待机 clip 从 `idle` 改为 `idel`；并将玩家 `Bonk` 总时长改为 `1.26s`、`jump` 持续时间改为 `1.933s`，与新版模型更贴近。 |
-| 2026-06-02 | 移除 jump 的重复高度叠加 | 已完成 | AI Assistant | 确认新版 `jump` 动画自身已包含明显的竖向位移；移除了玩家跟随系统里的额外 `jumpOffset`，并删除 NPC 本地视觉抛物线偏移，避免跳跃被抬高两次。 |
-| 2026-06-02 | 修复开局误触导致的自动 Bonk | 已完成 | AI Assistant | 为 `combatSystem` 增加 `0.2s` 开局输入冷却，并在 `startGame()` 时显式 `resetCombat()`，避免点击开始游戏的那一下被当成首帧攻击输入。 |
-| 2026-05-28 | 修改 UI 技能提示文字 | 已完成 | AI Assistant | 将 `uiManager.ts` 中的技能提示改为 "Rock Solid — New skills coming soon!"。 |
-| 2026-05-28 | 删除场地中央 3D 播报牌 | 已完成 | AI Assistant | 移除了场地中心的 3D 计时器、击晕计数、存活计数和 Kill Feed 信息流。 |
-| 2026-05-28 | 移除 NPC 与玩家头顶文字 | 已完成 | AI Assistant | 移除了 NPC 和玩家日常头顶文字标签，仅在技能激活时保留倒计时。 |
-| 2026-05-28 | 优化结算界面 UI 文字逻辑 | 已完成 | AI Assistant | 胜利时显示 "Round Complete" 与 "You Win"，失败时显示 "GAME OVER" 与 "You Lose"。 |
-| 2026-05-28 | 排查并修复 Game Over 返回大厅按钮失效 | 已完成 | AI Assistant | 重构了 `uiManager.ts` 的 Game Over 弹窗点击链路，修复按钮点击不触发、遮罩误吞事件等问题。 |
-| 2026-05-28 | 修复返回 Lobby 后残留 UI / 角色异常 / 旧实体访问 | 已完成 | AI Assistant | 修复了 `Transform not found` 类错误；补齐游戏重置时对世界 UI、玩家伪装、技能实体、arena 实体的清理。 |
-| 2026-05-28 | 基于代码梳理当前场地生成逻辑 | 已完成 | AI Assistant | 确认旧 arena 为运行时程序化生成，核心在 `arena.ts` 中通过 `buildArena()` 动态创建。 |
-| 2026-05-28 | 放弃纯代码建筑实验，改为复用 `MoonLobby1.glb` 作为 Arena 母体 | 已完成 | AI Assistant | 保留 Lobby 原模型，同时在开局后于战斗区运行时再实例化一份同模型，替代此前的程序化建筑。 |
-| 2026-05-28 | 将 Arena 模型放大到 `1.5x` | 已完成 | AI Assistant | 仅放大战斗区的 `MoonLobby1.glb`，未改动 Lobby 入口那一份模型。 |
-| 2026-05-28 | 去除对 `MoonLobby1.glb` 的额外网格碰撞注入 | 已完成 | AI Assistant | 移除了 `visibleMeshesCollisionMask` 的额外物理碰撞设置，改为优先依赖模型自身携带的 collider。 |
-| 2026-05-28 | 隐藏 Lobby 时将整套模型移出战斗区 | 已完成 | AI Assistant | 不再只把 Lobby 下沉到地下，而是整体移到远处，避免与 Arena 实例叠加出空气墙。 |
+| 2026-06-02 | Translate README.md to English | Completed | AI Assistant | Completely rewrote README.md in English to match project standards. |
+| 2026-06-02 | Translate project rules and tasks to English | Completed | AI Assistant | Switched the language of documentation and rules to English as per user request. |
+| 2026-06-02 | Update README.md | Completed | AI Assistant | Rewrote README to reflect mobile goals, core rules (task logging/preview limits), and latest features. |
+| 2026-06-02 | Update Project Rules and Establish Task Logging | Completed | AI Assistant | Added technical specs and task logging requirements to `.trae/rules/decentraland.md`. |
+| 2026-06-02 | Initial POC Scan and Structure Planning | Completed | AI Assistant | Scanned project structure, main loop, UI, and state flow; proposed cleanup for `uiManager.ts`. |
+| 2026-06-02 | Melee Combat: Point-click to Forward Hit Detection | Completed | AI Assistant | Changed "click NPC to kill" to forward-facing hit window detection. |
+| 2026-06-02 | Player Appearance, Camera, and Movement Tuning | Completed | AI Assistant | Added 3rd-person follow camera; tuned player rotation and height alignment. |
+| 2026-06-02 | NPC Ground Alignment and Hitbox Tuning | Completed | AI Assistant | NPCs now snap to ground height; enlarged hitboxes and attack ranges. |
+| 2026-06-02 | Player Animation Upgrade (Muscledoge) | Completed | AI Assistant | Integrated `idel / walk / run / jump / Bonk` animations; fixed sprint modifier keys. |
+| 2026-06-02 | NPC Animation State Machine (v1) | Completed | AI Assistant | Added random state switching for NPCs (idle/walk/run/jump/Bonk). |
+| 2026-06-02 | NPC Squish Animation on Hit | Completed | AI Assistant | NPCs now squish down before turning into the `SmallDoge` death model. |
+| 2026-05-28 | UI Skill Text Update | Completed | AI Assistant | Changed skill hint to "Rock Solid — New skills coming soon!". |
+| 2026-05-28 | Removed 3D Broadcast Boards | Completed | AI Assistant | Removed central 3D timer, counters, and kill feed from the arena. |
+| 2026-05-28 | Removed Floating Text Above NPCs/Players | Completed | AI Assistant | Cleaned up world UI labels for better immersion. |
+| 2026-05-28 | Fixed Game Over "Return to Lobby" Button | Completed | AI Assistant | Refactored UI click logic to fix broken button events and cleanup routines. |
+| 2026-05-28 | Replaced Procedural Arena with MoonLobby1.glb | Completed | AI Assistant | Switched to instantiating the lobby model as the arena base for better design. |
 
-## 本轮对话总结
-
-### 1. 玩法与战斗
-- 已将战斗从“点击 NPC 立即击杀”改成“点击触发出拳，只有前方命中窗口内碰到 NPC 才击杀”。
-- 出拳动画支持重复点击打断并立即重启，不必等待上一拳完整播放完。
-- NPC 死亡后切换到小狗模型时，死亡动画只播放一次，不再循环。
-- 当前击杀判定已提前，体感更接近“打到就死”，命中与挥击之间延迟已缩短。
-
-### 2. 玩家外观与移动
-- 玩家真实 Avatar 在战斗区内被隐藏，用 `Muscledoge.glb` 作为可见外观。
-- 狗替身跟随真实玩家的位置、高度和朝向，避免固定在平面 `y=0`。
-- 角色转向从瞬时拷贝改成限速旋转，减少轻微转向时大角度猛拐的观感。
-- 空格跳跃时，狗替身也会播放跳跃表现并跟随真实跳跃节奏。
-
-### 3. 相机
-- 已加入第三人称追尾相机，并根据试玩多次上调高度与后拉距离。
-- 镜头由硬跟随改为更平滑的追踪，以减轻左右转动时的晕眩感。
-- 相机在进入游戏时启用，返回 Lobby 时关闭。
-
-### 4. NPC
-- NPC 巡逻不再只按平面 `x/z` 移动，而是通过向下采样地面高度贴着场地表面移动。
-- NPC 的命中体积和前方攻击判定范围都已调大，降低“明明打中了却没死”的挫败感。
-- NPC 现已接入轻量“人类化”动作状态机，会围绕 waypoint 在 `idle / walk / run / jump / Bonk` 之间随机但按距离合理切换，不再像匀速巡逻机器人。
-- NPC 的 `jump` 使用视觉抛物线偏移，保留地面 hitbox 稳定；被击杀时会重置局部位移，避免死亡模型悬空。
-- NPC 当前 `walk/run` 的真实位移速度已直接对齐玩家速度，不再为每只 NPC 单独随机这两档的实际移动值。
-- NPC 被命中后不再立刻换模，而是先进入一个很短的贴地压扁阶段，再切小狗死亡模型，死亡演出更有“砸扁”的感觉。
-- 已修复压扁后切死亡模型时的 `Animator` state 异常；此前这个异常会导致系统报错后看起来“全部都不动了”。
-- 当前压扁阶段已进一步拉长并加重，方便在移动端和第三人称视角下也能明确看见“先拍扁，再变小狗”。
-
-### 5. 动画系统
-- `Muscledoge.glb` 新版动画已确认包含 `Bonk / idle / jump / run / walk` 等 clip。
-- 玩家当前动画优先级为：`Bonk > jump > run > walk > idle`。
-- `Bonk` 动画已提速约 30%。
-- `jump` 不再通过大幅提速来硬对齐，而是保留原速播放，并通过调整跳跃持续时间来收手感。
-- NPC 当前动画切换逻辑已与玩家动作集对齐，但采用更克制的概率分布：远距离更偏向 `walk/run`，近 waypoint 更偏向 `idle/Bonk/jump`。
-
-### 6. 输入与速度
-- 经排查确认：当前 SDK 中桌面端 `Shift` 更应通过 `IA_MODIFIER` 读取，而不是 `IA_WALK`。
-- 玩家真实移动速度现已通过 `AvatarLocomotionSettings` 生效，而不只是动画切换。
-- 当前速度参数：
-  - `walkSpeed = 6`
-  - `jogSpeed = 6`
-  - `runSpeed = 10`
-
-### 7. 当前关键参数
-- `Bonk` 动画速度：`1.82`
-- `jump` 持续时间：`1.3s`
-- `walkSpeed / jogSpeed`：`6`
-- `runSpeed`：`10`
-
-### 8. UI 与 视觉优化 (2026-05-28 更新)
-- **技能 UI**: 提示文字改为 `Rock Solid — New skills coming soon!`。
-- **3D 播报牌**: 彻底移除了场地中央（48, 48）的 3D 计时器、击晕计数、存活计数。
-- **Kill Feed**: 禁用了世界空间内的实时击杀信息流显示。
-- **头顶标签**: 移除了 NPC 日常显示的 `"NPC or Player?"` 和被击杀后的 `"ELIMINATED"` 标签。
-- **玩家标签**: 移除了玩家日常显示的技能就绪/冷却状态，仅在“变身石头”期间显示倒计时。
-
-### 9. 过程中确认过的关键结论
-- 不擅自打开 `preview`，预览与校对由人工完成。
-- `IA_WALK` 不是本项目里可靠的 `Shift` 检测来源，`IA_MODIFIER` 更符合当前 SDK 定义。
-- 玩家速度必须用 `AvatarLocomotionSettings` 接入，单独切动画不会改变真实移动速度。
-- `jump` 动画原始 clip 明显长于早期设定的跳跃窗口，所以需要通过持续时间对齐，而不是单纯停动画。
-- **世界 3D UI**：为了画面整洁，所有场地中央的实时播报文字已移除，玩家仅通过 HUD 获取信息。
-- **信息极简**：日常状态下 NPC 和玩家头顶不再有任何干扰文字。
-
-### 10. 本轮新增结论：UI / 状态流 / 返回大厅
-- `Game Over` 面板的 `Return to Lobby` 失效，根因不只是按钮事件本身，还叠加了旧实体被删除后系统仍继续访问导致的 update loop 错误。
-- `@dcl/react-ecs` 当前事件回调形态不适合依赖 `stopPropagation()`；Game Over 弹窗已改成更稳的点击结构。
-- 返回 Lobby 时必须同时清理：世界 3D UI、玩家伪装实体、技能实体、Arena 运行时实体、NPC 根实体与其附属标签/模型。
-- 仅仅把实体“藏到地下”不够安全；对于带大体积 collider 的模型，必须整体移出战斗区，避免隐藏模型继续干扰物理碰撞。
-
-### 11. 本轮新增结论：建筑与场地方向
-- 继续纯代码手工拼建筑，难以稳定满足“强秩序感、对称性、克制”的空间设计要求。
-- 当前更合适的路线是：直接复用已有建筑模型 `MoonLobby1.glb` 作为空间母体，再在玩法层做嵌入和微调。
-- 当前 Arena 已改为运行时实例化一份 `MoonLobby1.glb`；Lobby 保留原入口模型，二者并存，符合“入口与战斗区同母体但各有一份”的需求。
-- Arena 运行时生成逻辑仍保留 `trackArenaEntity()` 链路，因此返回 Lobby 时可动态清理，不依赖静态 baked 场景。
-
-### 12. 本轮新增结论：碰撞与模型使用
-- 旧的程序化 Arena collider 已经移除，但 `MoonLobby1.glb` 本身的碰撞体现在成为主要碰撞来源。
-- 我方代码不应再对 `MoonLobby1.glb` 额外注入整模型可见网格物理碰撞，应优先尊重模型自带 collider。
-- 当前空气墙问题仍需继续验证，重点排查方向为：
-  - Arena 这份 `MoonLobby1.glb` 内部 collider 是否存在范围异常；
-  - 是否仍有非 Arena 的残留实体或交互体叠在战斗区；
-  - 放大到 `1.5x` 后，模型内原有碰撞体是否被同步放大得过于激进。
-
-## 当前计划 / 待办事项
-- [ ] 继续人工试玩并微调 `jump` 时长、`walk/run` 速度差、`Bonk` 命中与动作手感
-- [ ] 人工观察 NPC 当前 `idle / walk / run / jump / Bonk` 的切换频率，决定是否继续下调 `Bonk/jump` 的触发概率或缩短停顿时长
-- [ ] 人工观察 NPC 击杀前“压扁到地面”的时长与力度，决定是否继续加大压缩幅度或延长停顿约 `0.05s ~ 0.1s`
-- [ ] 继续排查 `MoonLobby1.glb` 在 Arena 中的空气墙 / 异常 collider，必要时结合模型结构逐段验证
-- [ ] 视试玩结果决定是否同步放大 NPC 活动范围、技能判定点与玩家伪装区域，使其更匹配 `1.5x` 场地
-- [ ] 如需进入下一阶段，继续梳理 `uiManager.ts` 与状态流，降低后续功能开发的耦合度
-- [ ] 视人工试玩结果决定是否继续调整第三人称相机高度、跟随平滑度与角色转向速度
+## Current Plans / To-Do List
+- [ ] Continue manual playtesting to fine-tune `jump` duration and `Bonk` feel.
+- [ ] Monitor NPC state switching frequency (adjust `Bonk/jump` probability).
+- [ ] Investigate invisible walls/colliders in `MoonLobby1.glb` instance.
+- [ ] Scale NPC patrol zones and skill triggers to match `1.5x` arena scale.
+- [ ] Refactor `uiManager.ts` to decouple state management from UI layout.

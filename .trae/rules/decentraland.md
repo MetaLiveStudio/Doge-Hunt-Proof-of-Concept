@@ -1,26 +1,25 @@
-我们正在开发一个基于Decentraland的移动游戏，游戏名称为Doge Hunt。注意我们的核心目标是要去创建一个基于Decentraland的移动游戏，而不是一个基于Web的移动游戏。以下是我们的重要的开发说明和技能。尤其是技能要十分重视。
+We are developing a Decentraland-based mobile game titled **Doge Hunt**. Our core objective is to create a game optimized specifically for the Decentraland mobile client, rather than a generic web-based experience. The following development guidelines and skills are critical.
 
-### **核心规则**
-1. **任务记录要求**：
-   - 必须在项目根目录维护一个 `tasks.md` 文件。
-   - **所有的 AI 和 Agent 在开启任何新任务前，必须首先阅读并理解 `tasks.md` 中的历史记录和当前计划。**
-   - **每完成一个任务（或重要的子任务阶段），必须立即更新 `tasks.md`**，记录任务内容、完成情况、遇到的问题及后续计划。
-2. **预览模式限制**：
-   - 严禁擅自打开预览（preview）模式。预览和校对工作由人工完成。
+### **Core Rules**
+1. **Task Logging Requirement**:
+   - A `tasks.md` file must be maintained in the project root.
+   - **Before starting any new task**, all AI agents and developers must read and understand the history and current plans in `tasks.md`.
+   - **Immediately upon completing a task** (or a major sub-task phase), `tasks.md` must be updated with the task description, completion status, encountered issues, and next steps.
+2. **Preview Mode Restriction**:
+   - **Do not launch preview mode** without explicit authorization. Previewing and verification are handled manually by designated personnel.
 
-### **技术规范 (SDK7/ECS7)**
-1. **开发框架**：
-   - 必须使用 Decentraland SDK7 (ECS7) 及其标准组件。
-   - UI 开发优先使用 `react-ecs` (SDK7 官方 UI 方案)。
-2. **移动端优化**：
-   - 严格控制实体（Entities）和多边形（Triangles）数量。
-   - 纹理大小建议不超过 512x512，尽可能使用正方形且为 2 的幂次方的尺寸。
-   - 避免在每一帧（System）中进行高开销的计算或频繁的内存分配。
-3. **架构模式**：
-   - 遵循数据驱动的设计模式，逻辑应放在 Systems 中，状态放在 Components 中。
-   - 保持代码模块化，公共功能提取到工具类或独立的 System 中。
+### **Technical Specifications (SDK7/ECS7)**
+1. **Development Framework**:
+   - Must use Decentraland SDK7 (ECS7) and its standard components.
+   - UI development should prioritize `@dcl/react-ecs` (the official SDK7 UI solution).
+2. **Mobile Optimization**:
+   - Strictly control the number of Entities and Triangles.
+   - Texture sizes should ideally not exceed 512x512, using square and power-of-two dimensions where possible.
+   - Avoid high-overhead calculations or frequent memory allocations within every frame (Systems).
+3. **Architectural Patterns**:
+   - Follow data-driven design patterns: logic in Systems, state in Components.
+   - Keep code modular; extract common functionality into utility classes or independent Systems.
 
-### **参考资源**
+### **Reference Resources**
 - [Decentraland - Building for Mobile Guide Book](https://confirmed-copper-f3a.notion.site/Decentraland-Building-for-Mobile-2f55f96e0b70805785abdaba16c5f763)
 - [Decentraland Skills (OpenDCL)](https://github.com/dcl-regenesislabs/opendcl)
-
