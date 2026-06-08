@@ -1,15 +1,20 @@
 /**
- * combat.ts — Bat swing, hit detection, knockback, knockout
- * On bonk: swap Muscledoge → SmallDoge model, knockback, permanent death.
+ * combat.ts — Tap-to-swing melee combat
+ * A tap starts a short attack window. NPCs only die if they are inside
+ * the player's forward hit zone during that swing.
  */
 import {
   engine, Entity, Transform, InputAction,
   PointerEventType, inputSystem,
-  GltfContainer, TextShape,
 } from '@dcl/sdk/ecs'
 import { Vector3 } from '@dcl/sdk/math'
-import { NpcHitbox, NpcPatrol, DEAD_DOGE_MODEL, decrementAlive, NPC_DEAD_VISUAL_SCALE, aliveCount } from './npc'
+import { NpcPatrol, aliveCount, startNpcElimination } from './npc'
 import { addKillFeedMessage } from './ui'
+import {
+  playPlayerAttackAnimation,
+  PLAYER_ATTACK_IMPACT_TIME,
+  PLAYER_ATTACK_TOTAL_DURATION,
+} from './player'
 
 const KILL_MESSAGES = [
   'Such eliminate. Very dead. Wow.',
@@ -26,90 +31,120 @@ const KILL_MESSAGES = [
 
 export let totalBonks = 0
 
+const ATTACK_MIN_FORWARD = 0.25
+const ATTACK_RANGE = 2.9
+const ATTACK_RADIUS = 1.6
+const ATTACK_HIT_WINDOW_SECONDS = 0.12
+const COMBAT_START_INPUT_GRACE_SECONDS = 0.2
+
+let attackElapsed = PLAYER_ATTACK_TOTAL_DURATION
+let hasHitThisSwing = false
+let startInputGraceTimer = 0
+
 /** Reset combat state */
 export function resetCombat(): void {
   totalBonks = 0
+  attackElapsed = PLAYER_ATTACK_TOTAL_DURATION
+  hasHitThisSwing = false
+  startInputGraceTimer = COMBAT_START_INPUT_GRACE_SECONDS
 }
 
 /** Knockback an NPC and swap to dead model */
 function knockbackNpc(npcRoot: Entity, hitOrigin: Vector3): void {
-  const transform = Transform.getMutable(npcRoot)
-  const patrol = NpcPatrol.getMutable(npcRoot)
+  const patrol = NpcPatrol.get(npcRoot)
+  if (patrol.isKnockedOut || patrol.isBeingEliminated) return
 
-  // Knockback direction (away from player)
-  const npcPos = transform.position
-  const direction = Vector3.subtract(npcPos, hitOrigin)
-  const len = Vector3.length(direction)
-  const normalized = len > 0.01
-    ? Vector3.normalize(direction)
-    : Vector3.create(0, 0, 1)
-
-  const KNOCKBACK_FORCE = 3
-  const newX = npcPos.x + normalized.x * KNOCKBACK_FORCE
-  const newZ = npcPos.z + normalized.z * KNOCKBACK_FORCE
-
-  // Move to knockback position
-  transform.position = Vector3.create(newX, 0, newZ)
-
-  // Swap model: Muscledoge → SmallDoge (dead), shrink to 50%
-  const visualEntity = patrol.visualEntity as Entity
-  const gltf = GltfContainer.getMutable(visualEntity)
-  gltf.src = DEAD_DOGE_MODEL
-  const visualTransform = Transform.getMutable(visualEntity)
-  visualTransform.scale = NPC_DEAD_VISUAL_SCALE
-  // Change label from "?" to "X" (dead)
-  if (patrol.labelEntity) {
-    const labelText = TextShape.getMutable(patrol.labelEntity as Entity)
-    labelText.text = 'ELIMINATED'
-    // Move label to final position
-    const labelTransform = Transform.getMutable(patrol.labelEntity as Entity)
-    labelTransform.position = Vector3.create(newX, 1.5, newZ)
-  }
-
-  // Mark as permanently dead
-  patrol.isKnockedOut = true
-  patrol.knockoutTimer = -1
+  startNpcElimination(npcRoot, hitOrigin)
 
   // Update counters
   totalBonks++
-  decrementAlive()
 
   // Kill feed
   const msg = KILL_MESSAGES[Math.floor(Math.random() * KILL_MESSAGES.length)]
   addKillFeedMessage(msg)
   
-  // Check if all NPCs eliminated
-  if (aliveCount === 0) {
+  // One NPC is already in the death pipeline, so <= 1 means this hit clears the board.
+  if (aliveCount <= 1) {
     addKillFeedMessage('🎉 ALL DOGES ELIMINATED! 🎉')
   }
 }
-/** Combat system — detect clicks on NPCs */
-export function combatSystem(_dt: number): void {
-  for (const [hitbox] of engine.getEntitiesWith(NpcHitbox, Transform)) {
-    const { rootEntity } = NpcHitbox.get(hitbox)
-    const entity = rootEntity as Entity
-    if (!NpcPatrol.has(entity)) continue
+function tryGetAttackPose(): { origin: Vector3; forward: Vector3 } | null {
+  const playerTransform = Transform.getOrNull(engine.PlayerEntity)
+  if (!playerTransform) return null
 
+  const origin = Vector3.create(
+    playerTransform.position.x,
+    0,
+    playerTransform.position.z
+  )
+
+  const rawForward = Vector3.rotate(Vector3.Forward(), playerTransform.rotation)
+  const flatForward = Vector3.create(rawForward.x, 0, rawForward.z)
+  const flatForwardLength = Vector3.length(flatForward)
+  const forward = flatForwardLength > 0.001
+    ? Vector3.normalize(flatForward)
+    : Vector3.Forward()
+
+  return { origin, forward }
+}
+
+function tryHitNpcInFront(origin: Vector3, forward: Vector3): boolean {
+  let bestTarget: Entity | null = null
+  let bestDistance = Number.POSITIVE_INFINITY
+
+  for (const [entity] of engine.getEntitiesWith(NpcPatrol, Transform)) {
     const patrol = NpcPatrol.get(entity)
-    if (patrol.isKnockedOut) continue
+    if (patrol.isKnockedOut || patrol.isBeingEliminated) continue
 
-    if (inputSystem.isTriggered(InputAction.IA_POINTER, PointerEventType.PET_DOWN, hitbox)) {
-      const cmd = inputSystem.getInputCommand(
-        InputAction.IA_POINTER,
-        PointerEventType.PET_DOWN,
-        hitbox
-      )
+    const npcTransform = Transform.get(entity)
+    const toNpc = Vector3.subtract(npcTransform.position, origin)
+    const flatToNpc = Vector3.create(toNpc.x, 0, toNpc.z)
 
-      let hitOrigin = Vector3.create(24, 0, 24)
-      if (cmd && cmd.hit && cmd.hit.globalOrigin) {
-        hitOrigin = Vector3.create(
-          cmd.hit.globalOrigin.x,
-          cmd.hit.globalOrigin.y,
-          cmd.hit.globalOrigin.z
-        )
-      }
+    const forwardDistance = Vector3.dot(flatToNpc, forward)
+    if (forwardDistance < ATTACK_MIN_FORWARD || forwardDistance > ATTACK_RANGE) continue
 
-      knockbackNpc(entity, hitOrigin)
+    const projected = Vector3.scale(forward, forwardDistance)
+    const lateralOffset = Vector3.subtract(flatToNpc, projected)
+    const lateralDistance = Vector3.length(lateralOffset)
+    if (lateralDistance > ATTACK_RADIUS) continue
+
+    const planarDistance = Vector3.length(flatToNpc)
+    if (planarDistance < bestDistance) {
+      bestDistance = planarDistance
+      bestTarget = entity as Entity
     }
+  }
+
+  if (!bestTarget) return false
+
+  knockbackNpc(bestTarget, origin)
+  return true
+}
+
+/** Combat system — tap anywhere to swing, hit only when an NPC is inside the attack zone */
+export function combatSystem(dt: number): void {
+  if (startInputGraceTimer > 0) {
+    startInputGraceTimer = Math.max(0, startInputGraceTimer - dt)
+    return
+  }
+
+  if (inputSystem.isTriggered(InputAction.IA_POINTER, PointerEventType.PET_DOWN)) {
+    attackElapsed = 0
+    hasHitThisSwing = false
+    playPlayerAttackAnimation()
+  }
+
+  if (attackElapsed >= PLAYER_ATTACK_TOTAL_DURATION) return
+  attackElapsed += dt
+  if (hasHitThisSwing) return
+
+  if (attackElapsed < PLAYER_ATTACK_IMPACT_TIME) return
+  if (attackElapsed > PLAYER_ATTACK_IMPACT_TIME + ATTACK_HIT_WINDOW_SECONDS) return
+
+  const attackPose = tryGetAttackPose()
+  if (!attackPose) return
+
+  if (tryHitNpcInFront(attackPose.origin, attackPose.forward)) {
+    hasHitThisSwing = true
   }
 }

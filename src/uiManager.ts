@@ -126,81 +126,103 @@ function renderModeSelectionUI() {
 /** Render game over UI */
 function renderGameOverUI() {
   const stats = getGameStats ? getGameStats() : { bonks: 0, alive: 0, total: 12, time: '0:00' }
-  
-  const modal = h(UiEntity, {
-    key: 'gameOverModal',
+  const isWin = stats.alive === 0
+  const titleText = isWin ? 'Round Complete' : 'GAME OVER'
+  const subtitleText = isWin ? 'You Win' : 'You Lose'
+  const titleColor = isWin ? Color4.create(0.22, 1, 0.08, 1) : Color4.create(1, 0.2, 0.2, 1)
+
+  return h(UiEntity, {
+    key: 'gameOverOverlay',
     uiTransform: {
-      width: 600,
-      height: 500,
+      width: '100%',
+      height: '100%',
       positionType: 'absolute',
-      position: { left: '50%', top: '50%' },
-      margin: { left: -300, top: -250 },  // Half of width and height to center
-      flexDirection: 'column',
+      position: { left: 0, top: 0 },
       alignItems: 'center',
       justifyContent: 'center',
-      padding: 40,
     },
-    uiBackground: { color: Color4.create(0.08, 0.08, 0.12, 0.95) },
   }, [
-    h(Label, {
-      key: 'title',
-      value: 'GAME OVER',
-      fontSize: 48,
-      color: Color4.create(1, 0.2, 0.2, 1),
-      uiTransform: { margin: { bottom: 20 } },
-    }),
-    h(Label, {
-      key: 'subtitle',
-      value: 'Round Complete',
-      fontSize: 24,
-      color: Color4.create(1, 0.84, 0, 1),
-      uiTransform: { margin: { bottom: 30 } },
-    }),
-    h(Label, {
-      key: 'bonks',
-      value: `Total Bonks: ${stats.bonks}`,
-      fontSize: 26,
-      color: Color4.create(0, 0.96, 1, 1),
-      uiTransform: { margin: { bottom: 15 } },
-    }),
-    h(Label, {
-      key: 'survived',
-      value: `Doges Remaining: ${stats.alive}/${stats.total}`,
-      fontSize: 26,
-      color: Color4.create(0.22, 1, 0.08, 1),
-      uiTransform: { margin: { bottom: 15 } },
-    }),
-    h(Label, {
-      key: 'time',
-      value: `Time: ${stats.time}`,
-      fontSize: 26,
-      color: Color4.create(1, 0.84, 0, 1),
-      uiTransform: { margin: { bottom: 30 } },
-    }),
-    // Wrap button in UiEntity to ensure click events work
     h(UiEntity, {
-      key: 'buttonWrapper',
+      key: 'gameOverBackdrop',
       uiTransform: {
-        width: 350,
-        height: 70,
-        margin: { top: 10 },
+        width: '100%',
+        height: '100%',
+        positionType: 'absolute',
+        position: { left: 0, top: 0 },
+        zIndex: 0,
       },
+      uiBackground: { color: Color4.create(0, 0, 0, 0.7) },
+      onMouseDown: () => {
+        console.log('[UI] Game over overlay clicked, closing modal')
+        uiState.showGameOver = false
+      },
+    }),
+    h(UiEntity, {
+      key: 'gameOverModal',
+      uiTransform: {
+        width: 600,
+        height: 500,
+        flexDirection: 'column',
+        alignItems: 'center',
+        justifyContent: 'center',
+        padding: { top: 40, bottom: 40, left: 40, right: 40 },
+        zIndex: 1,
+      },
+      uiBackground: { color: Color4.create(0.08, 0.08, 0.12, 0.95) },
     }, [
-      h(Button, {
+      h(Label, {
+        key: 'title',
+        value: titleText,
+        fontSize: 48,
+        color: titleColor,
+        uiTransform: { margin: { bottom: 20 } },
+      }),
+      h(Label, {
+        key: 'subtitle',
+        value: subtitleText,
+        fontSize: 24,
+        color: Color4.create(1, 0.84, 0, 1),
+        uiTransform: { margin: { bottom: 30 } },
+      }),
+      h(Label, {
+        key: 'bonks',
+        value: `Total Bonks: ${stats.bonks}`,
+        fontSize: 26,
+        color: Color4.create(0, 0.96, 1, 1),
+        uiTransform: { margin: { bottom: 15 } },
+      }),
+      h(Label, {
+        key: 'survived',
+        value: `Doges Remaining: ${stats.alive}/${stats.total}`,
+        fontSize: 26,
+        color: Color4.create(0.22, 1, 0.08, 1),
+        uiTransform: { margin: { bottom: 15 } },
+      }),
+      h(Label, {
+        key: 'time',
+        value: `Time: ${stats.time}`,
+        fontSize: 26,
+        color: Color4.create(1, 0.84, 0, 1),
+        uiTransform: { margin: { bottom: 30 } },
+      }),
+      h(UiEntity, {
         key: 'returnBtn',
-        value: 'RETURN TO LOBBY',
-        variant: 'primary',
-        uiTransform: { 
-          width: '100%', 
-          height: '100%',
-          padding: 20,  // Add padding like official example
+        uiTransform: {
+          width: 350,
+          height: 70,
+          margin: { top: 10 },
+          alignItems: 'center',
+          justifyContent: 'center',
         },
-        fontSize: 22,
+        uiBackground: { color: Color4.create(1, 0.2, 0.45, 1) },
+        uiText: {
+          value: 'RETURN TO LOBBY',
+          fontSize: 22,
+          color: Color4.create(1, 1, 1, 1),
+          textAlign: 'middle-center',
+        },
         onMouseDown: () => {
-          console.log('[UI] ========== BUTTON MOUSE DOWN ==========')
-        },
-        onMouseUp: () => {
-          console.log('[UI] ========== BUTTON MOUSE UP ==========')
+          console.log('[UI] Return to Lobby button clicked')
           console.log('[UI] onReturnToLobby exists?', !!onReturnToLobby)
           uiState.showGameOver = false
           if (onReturnToLobby) {
@@ -213,18 +235,6 @@ function renderGameOverUI() {
       }),
     ]),
   ])
-  
-  // Wrap in fullscreen container (like HUD does)
-  return h(UiEntity, {
-    uiTransform: {
-      width: '100%',
-      height: '100%',
-      positionType: 'absolute',
-      position: { left: 0, top: 0 },
-      pointerFilter: 'block',  // Allow clicks to pass through to children
-    },
-    uiBackground: { color: Color4.create(1, 0, 0, 0.3) },  // DEBUG: red tint to see container
-  }, [modal])
 }
 
 /** Render HUD (in-game stats and instructions) */
@@ -395,7 +405,7 @@ function renderHUD() {
       }, [
         h(Label, {
           key: 'eKeyTitle',
-          value: 'Rock Solid — More skills will be released.',
+          value: 'Rock Solid — New skills coming soon!',
           fontSize: es(12),
           color: CYAN,
           uiTransform: { height: es(18), margin: { bottom: es(3) } },

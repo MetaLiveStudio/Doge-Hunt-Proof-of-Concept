@@ -3,46 +3,87 @@
  */
 import {
   engine, Entity, Transform,
-  MeshRenderer, MeshCollider, Material,
+  MeshCollider,
+  GltfContainer, ColliderLayer, VisibilityComponent,
   pointerEventsSystem, InputAction,
   TextShape, Billboard, BillboardMode,
 } from '@dcl/sdk/ecs'
-import { Vector3, Color3, Color4 } from '@dcl/sdk/math'
+import { Vector3, Color4 } from '@dcl/sdk/math'
+import { movePlayerTo } from '~system/RestrictedActions'
 import { GameState, setState } from './gameState'
 import { startGame } from './index'
 import { cleanupGame, resetGameState } from './gameReset'
 import { uiState } from './uiManager'
 import { hideHud } from './hud'
+import { enableFollowCamera, disableFollowCamera } from './cameraRig'
 
 // Lobby position
-const LOBBY_X = 8
-const LOBBY_Z = 8
+const LOBBY_X = 48
+const LOBBY_Z = 48
+const LOBBY_HIDDEN_X = 1000
+const LOBBY_HIDDEN_Y = -100
+const LOBBY_HIDDEN_Z = 1000
+const PLAYER_SPAWN_Y = 1.2
 
+let lobbyRoot: Entity | null = null
+let lobbyModelEntity: Entity | null = null
 let startButtonEntity: Entity | null = null
+let lobbyLabelEntity: Entity | null = null
+
+function setLobbyVisible(visible: boolean): void {
+  if (lobbyRoot) {
+    const rootTransform = Transform.getMutable(lobbyRoot)
+    rootTransform.position = Vector3.create(
+      visible ? LOBBY_X : LOBBY_HIDDEN_X,
+      visible ? 0 : LOBBY_HIDDEN_Y,
+      visible ? LOBBY_Z : LOBBY_HIDDEN_Z
+    )
+  }
+
+  if (lobbyModelEntity) {
+    VisibilityComponent.createOrReplace(lobbyModelEntity, { visible })
+  }
+  if (startButtonEntity) {
+    VisibilityComponent.createOrReplace(startButtonEntity, { visible })
+  }
+  if (lobbyLabelEntity) {
+    VisibilityComponent.createOrReplace(lobbyLabelEntity, { visible })
+  }
+}
 
 /** Create the lobby area with start button */
 export function createLobby(): void {
   console.log('[Lobby] Creating lobby...')
-  
-  // Floor platform
-  const platform = engine.addEntity()
-  Transform.create(platform, {
+
+  lobbyRoot = engine.addEntity()
+  Transform.create(lobbyRoot, {
     position: Vector3.create(LOBBY_X, 0, LOBBY_Z),
-    scale: Vector3.create(8, 0.2, 8),
-  })
-  MeshRenderer.setBox(platform)
-  MeshCollider.setBox(platform)
-  Material.setPbrMaterial(platform, {
-    albedoColor: Color4.create(0.1, 0.1, 0.15, 1),
-    metallic: 0.3,
-    roughness: 0.7,
   })
 
-  // Glowing start button (cube)
+  // Replace the old flat platform with the MoonLobby model.
+  lobbyModelEntity = engine.addEntity()
+  Transform.create(lobbyModelEntity, {
+    parent: lobbyRoot,
+    position: Vector3.create(0, 0, 0),
+    scale: Vector3.create(1, 1, 1),
+  })
+  GltfContainer.create(lobbyModelEntity, {
+    src: 'models/MoonLobby1.glb',
+  })
+  VisibilityComponent.create(lobbyModelEntity, { visible: true })
+
+  // Start button model
   startButtonEntity = engine.addEntity()
-  Transform.create(startButtonEntity, { position: Vector3.create(LOBBY_X, 1.5, LOBBY_Z) })
-  MeshRenderer.setBox(startButtonEntity)
+  Transform.create(startButtonEntity, {
+    parent: lobbyRoot,
+    position: Vector3.create(0, 1.55, 0),
+    scale: Vector3.create(1.6, 1.6, 1.6),
+  })
   MeshCollider.setBox(startButtonEntity)
+  GltfContainer.create(startButtonEntity, {
+    src: 'models/roblox_doge_hat.glb',
+    visibleMeshesCollisionMask: ColliderLayer.CL_PHYSICS | ColliderLayer.CL_POINTER,
+  })
   
   console.log('[Lobby] Start button entity created:', startButtonEntity)
 
@@ -65,26 +106,22 @@ export function createLobby(): void {
   
   console.log('[Lobby] Click handler registered')
   
-  // Add material
-  Material.setPbrMaterial(startButtonEntity, {
-    albedoColor: Color4.create(0, 0.96, 1, 1),
-    emissiveColor: Color3.create(0, 0.96, 1),
-    emissiveIntensity: 5,
-  })
-
   // Floating label
-  const label = engine.addEntity()
-  Transform.create(label, {
-    position: Vector3.create(LOBBY_X, 3, LOBBY_Z),
+  lobbyLabelEntity = engine.addEntity()
+  Transform.create(lobbyLabelEntity, {
+    parent: lobbyRoot,
+    position: Vector3.create(0, 4.2, 0),
   })
-  TextShape.create(label, {
+  TextShape.create(lobbyLabelEntity, {
     text: 'DOGE HUNT\nClick to Start',
-    fontSize: 4,
+    fontSize: 5,
     textColor: Color4.create(1, 0.84, 0, 1),
     outlineColor: Color4.create(0, 0, 0, 1),
-    outlineWidth: 0.2,
+    outlineWidth: 0.5,
   })
-  Billboard.create(label, { billboardMode: BillboardMode.BM_Y })
+  Billboard.create(lobbyLabelEntity, { billboardMode: BillboardMode.BM_Y })
+  VisibilityComponent.create(lobbyLabelEntity, { visible: true })
+  VisibilityComponent.create(startButtonEntity, { visible: true })
 
   // Rotating animation system
   engine.addSystem((dt: number) => {
@@ -106,14 +143,15 @@ export function createLobby(): void {
 /** Start single player game (called from UI) */
 export function startSinglePlayer(): void {
   console.log('[Lobby] Starting single player game...')
-  
-  // Teleport player to arena
-  const playerTransform = Transform.getMutable(engine.PlayerEntity)
-  playerTransform.position = Vector3.create(24, 0, 24)
 
-  // Change state and start game
-  setState(GameState.PLAYING)
+  // Build gameplay space first, then flip into PLAYING so systems don't see a half-initialized round.
   startGame()
+  setState(GameState.PLAYING)
+  setLobbyVisible(false)
+  movePlayerTo({
+    newRelativePosition: { x: 48, y: PLAYER_SPAWN_Y, z: 48 },
+  })
+  enableFollowCamera()
 }
 
 /** Return to lobby */
@@ -130,9 +168,12 @@ export function returnToLobby(): void {
   
   // Teleport player back to lobby
   console.log('[Lobby] Step 3: Teleporting player to lobby...')
-  const playerTransform = Transform.getMutable(engine.PlayerEntity)
-  playerTransform.position = Vector3.create(LOBBY_X, 0, LOBBY_Z)
-  console.log('[Lobby] Player position:', playerTransform.position)
+  setLobbyVisible(true)
+  disableFollowCamera()
+  movePlayerTo({
+    newRelativePosition: { x: LOBBY_X, y: PLAYER_SPAWN_Y, z: LOBBY_Z },
+  })
+  console.log('[Lobby] Player moved back to lobby center')
 
   // Reset state
   console.log('[Lobby] Step 4: Resetting UI state...')

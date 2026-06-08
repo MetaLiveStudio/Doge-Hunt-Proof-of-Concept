@@ -1,8 +1,8 @@
 import { engine, Entity, Transform, TextShape, Billboard, BillboardMode } from '@dcl/sdk/ecs'
 import { Color4, Vector3 } from '@dcl/sdk/math'
 
-const CX = 24
-const CZ = 24
+const CX = 48
+const CZ = 48
 
 interface KillFeedEntry {
   entity: Entity
@@ -12,29 +12,16 @@ interface KillFeedEntry {
 const killFeedEntries: KillFeedEntry[] = []
 const MAX_FEED_ENTRIES = 4
 
-export function addKillFeedMessage(message: string): void {
-  if (killFeedEntries.length >= MAX_FEED_ENTRIES) {
-    const oldest = killFeedEntries.shift()
-    if (oldest) engine.removeEntity(oldest.entity)
+function removeEntityIfExists(entity: Entity | null): null {
+  if (entity !== null && Transform.getOrNull(entity)) {
+    engine.removeEntity(entity)
   }
+  return null
+}
 
-  const entity = engine.addEntity()
-  const yOffset = 3.5 + killFeedEntries.length * 0.6
-
-  Transform.create(entity, {
-    position: Vector3.create(CX, yOffset, CZ),
-  })
-
-  TextShape.create(entity, {
-    text: message,
-    fontSize: 3,
-    textColor: Color4.create(1, 0.84, 0, 1),
-    outlineColor: Color4.create(0, 0, 0, 1),
-    outlineWidth: 0.15,
-  })
-
-  Billboard.create(entity, { billboardMode: BillboardMode.BM_Y })
-  killFeedEntries.push({ entity, timer: 4 })
+export function addKillFeedMessage(message: string): void {
+  // World-space kill feed disabled as per user request
+  return
 }
 
 export function killFeedSystem(dt: number): void {
@@ -46,6 +33,11 @@ export function killFeedSystem(dt: number): void {
     }
   }
   for (let i = 0; i < killFeedEntries.length; i++) {
+    if (!Transform.getOrNull(killFeedEntries[i].entity)) {
+      killFeedEntries.splice(i, 1)
+      i--
+      continue
+    }
     const t = Transform.getMutable(killFeedEntries[i].entity)
     t.position = Vector3.create(CX, 3.5 + i * 0.6, CZ)
   }
@@ -58,6 +50,7 @@ export function createWelcomeSign(): void {
 let bonkCounterEntity: Entity | null = null
 
 export function createBonkCounter(): void {
+  bonkCounterEntity = removeEntityIfExists(bonkCounterEntity)
   bonkCounterEntity = engine.addEntity()
   Transform.create(bonkCounterEntity, {
     position: Vector3.create(CX, 6.5, CZ),
@@ -73,7 +66,7 @@ export function createBonkCounter(): void {
 }
 
 export function updateBonkCounter(count: number): void {
-  if (bonkCounterEntity !== null) {
+  if (bonkCounterEntity !== null && TextShape.getOrNull(bonkCounterEntity)) {
     const text = TextShape.getMutable(bonkCounterEntity)
     text.text = `BONKS: ${count}`
   }
@@ -90,6 +83,7 @@ export function resetRoundTimer(): void {
 }
 
 export function createRoundTimer(): void {
+  timerEntity = removeEntityIfExists(timerEntity)
   timerEntity = engine.addEntity()
   Transform.create(timerEntity, {
     position: Vector3.create(CX, 7.5, CZ),
@@ -110,17 +104,7 @@ export function roundTimerSystem(dt: number): void {
   if (roundTimeLeft <= 0) {
     roundTimeLeft = 0
     roundOver = true
-    addKillFeedMessage('ROUND OVER! Time is up.')
-    // Trigger game over UI (will be handled in index.ts)
-  }
-  if (timerEntity !== null) {
-    const minutes = Math.floor(roundTimeLeft / 60)
-    const seconds = Math.floor(roundTimeLeft % 60)
-    const text = TextShape.getMutable(timerEntity)
-    text.text = `${minutes}:${seconds < 10 ? '0' : ''}${seconds}`
-    if (roundTimeLeft <= 30 && !roundOver) {
-      text.textColor = Color4.create(1, 0.2, 0.2, 1)
-    }
+    // addKillFeedMessage('ROUND OVER! Time is up.')
   }
 }
 
@@ -129,6 +113,7 @@ let totalNpcCount = 0
 
 export function createAliveCounter(total: number): void {
   totalNpcCount = total
+  aliveEntity = removeEntityIfExists(aliveEntity)
   aliveEntity = engine.addEntity()
   Transform.create(aliveEntity, {
     position: Vector3.create(CX, 5.8, CZ),
@@ -144,7 +129,7 @@ export function createAliveCounter(total: number): void {
 }
 
 export function updateAliveCounter(alive: number): void {
-  if (aliveEntity !== null) {
+  if (aliveEntity !== null && TextShape.getOrNull(aliveEntity)) {
     const text = TextShape.getMutable(aliveEntity)
     text.text = `DOGES ALIVE: ${alive}/${totalNpcCount}`
     if (alive <= 3) {
@@ -153,4 +138,18 @@ export function updateAliveCounter(alive: number): void {
       text.textColor = Color4.create(1, 0.84, 0, 1)
     }
   }
+}
+
+export function cleanupWorldUi(): void {
+  for (const entry of killFeedEntries) {
+    if (Transform.getOrNull(entry.entity)) {
+      engine.removeEntity(entry.entity)
+    }
+  }
+  killFeedEntries.length = 0
+
+  bonkCounterEntity = removeEntityIfExists(bonkCounterEntity)
+  timerEntity = removeEntityIfExists(timerEntity)
+  aliveEntity = removeEntityIfExists(aliveEntity)
+  totalNpcCount = 0
 }

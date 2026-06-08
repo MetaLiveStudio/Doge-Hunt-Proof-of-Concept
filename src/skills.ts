@@ -12,8 +12,8 @@ import {
 } from '@dcl/sdk/ecs'
 import { Vector3, Color4, Color3 } from '@dcl/sdk/math'
 
-const CX = 24
-const CZ = 24
+const CX = 48
+const CZ = 48
 
 // Skill state
 let isDisguised = false
@@ -29,33 +29,34 @@ let dogeBodyEntity: number = 0
 let pillarDisguiseEntity: number = 0
 let skillStatusEntity: number = 0
 
-// Pillar positions (must match arena.ts)
+// Pillar positions (must match arena.ts floating slabs)
 const pillarPositions = [
-  { x: CX - 8, z: CZ - 8 },
-  { x: CX + 8, z: CZ - 8 },
-  { x: CX - 8, z: CZ + 8 },
-  { x: CX + 8, z: CZ + 8 },
-  { x: CX - 16, z: CZ },
-  { x: CX + 16, z: CZ },
-  { x: CX, z: CZ - 16 },
-  { x: CX, z: CZ + 16 },
+  { x: CX - 10, z: CZ - 10, rot: 45 },
+  { x: CX + 10, z: CZ + 10, rot: 45 },
+  { x: CX - 10, z: CZ + 10, rot: -45 },
+  { x: CX + 10, z: CZ - 10, rot: -45 },
+  { x: CX - 22, z: CZ, rot: 0 },
+  { x: CX + 22, z: CZ, rot: 0 },
+  { x: CX, z: CZ - 22, rot: 90 },
+  { x: CX, z: CZ + 22, rot: 90 },
 ]
 
 export function setupSkills(dogeBody: number): void {
   dogeBodyEntity = dogeBody
 
   // Create hidden pillar disguise entity (invisible by default)
+  // Match the new Meier White slab style
   pillarDisguiseEntity = engine.addEntity() as number
   Transform.create(pillarDisguiseEntity, {
     position: Vector3.create(0, -10, 0), // hidden below ground
-    scale: Vector3.create(1.4, 4, 1.4),
+    scale: Vector3.create(4.0, 4.0, 1.2),
   })
-  MeshRenderer.setCylinder(pillarDisguiseEntity)
-  MeshCollider.setCylinder(pillarDisguiseEntity)
+  MeshRenderer.setBox(pillarDisguiseEntity)
+  MeshCollider.setBox(pillarDisguiseEntity)
   Material.setPbrMaterial(pillarDisguiseEntity, {
-    albedoColor: Color4.create(0.08, 0.08, 0.12, 1),
+    albedoColor: Color4.create(0.9, 0.9, 0.92, 1),
     metallic: 0.3,
-    roughness: 0.6,
+    roughness: 0.2,
   })
 
   skillStatusEntity = engine.addEntity() as number
@@ -63,7 +64,7 @@ export function setupSkills(dogeBody: number): void {
     position: Vector3.create(CX, 0.5, CZ + 20),
   })
   TextShape.create(skillStatusEntity, {
-    text: '[E] Rock Solid - Hide as Pillar',
+    text: '',
     fontSize: 2,
     textColor: Color4.create(0, 0.96, 1, 0.8),
     outlineColor: Color4.create(0, 0, 0, 1),
@@ -72,16 +73,20 @@ export function setupSkills(dogeBody: number): void {
   Billboard.create(skillStatusEntity, { billboardMode: BillboardMode.BM_Y })
 }
 
-/** Find the nearest pillar and return distance */
-function nearestPillarDistance(pos: Vector3): number {
+// Find the nearest slab and return its distance and rotation
+function nearestPillarInfo(pos: Vector3): { dist: number, rot: number } {
   let minDist = Infinity
+  let nearestRot = 0
   for (const p of pillarPositions) {
     const dx = pos.x - p.x
     const dz = pos.z - p.z
     const dist = Math.sqrt(dx * dx + dz * dz)
-    if (dist < minDist) minDist = dist
+    if (dist < minDist) {
+      minDist = dist
+      nearestRot = p.rot
+    }
   }
-  return minDist
+  return { dist: minDist, rot: nearestRot }
 }
 
 export function skillSystem(dt: number): void {
@@ -91,6 +96,10 @@ export function skillSystem(dt: number): void {
   const playerPos = playerTransform.position
 
   if (skillStatusEntity) {
+    if (!Transform.getOrNull(skillStatusEntity as Entity)) {
+      skillStatusEntity = 0
+      return
+    }
     const statusTransform = Transform.getMutable(skillStatusEntity)
     statusTransform.position = Vector3.create(playerPos.x, SKILL_STATUS_Y, playerPos.z)
 
@@ -99,19 +108,8 @@ export function skillSystem(dt: number): void {
       const timeLeft = Math.ceil(disguiseTimer)
       statusText.text = `HIDING... ${timeLeft}s`
       statusText.textColor = Color4.create(0.22, 1, 0.08, 0.9)
-    } else if (cooldownTimer > 0) {
-      const cdLeft = Math.ceil(cooldownTimer)
-      statusText.text = `Rock Solid cooldown: ${cdLeft}s`
-      statusText.textColor = Color4.create(1, 0.2, 0.2, 0.8)
     } else {
-      const dist = nearestPillarDistance(playerPos)
-      if (dist <= PILLAR_RANGE) {
-        statusText.text = '[E] Rock Solid - READY!'
-        statusText.textColor = Color4.create(0, 0.96, 1, 1)
-      } else {
-        statusText.text = '[E] Rock Solid (get near a pillar)'
-        statusText.textColor = Color4.create(0, 0.96, 1, 0.5)
-      }
+      statusText.text = ''
     }
   }
 
@@ -132,28 +130,29 @@ export function skillSystem(dt: number): void {
 
   // Check for E key press
   if (inputSystem.isTriggered(InputAction.IA_PRIMARY, PointerEventType.PET_DOWN)) {
-    const dist = nearestPillarDistance(playerPos)
-    if (dist <= PILLAR_RANGE) {
-      startDisguise(playerPos)
+    const info = nearestPillarInfo(playerPos)
+    if (info.dist <= PILLAR_RANGE) {
+      startDisguise(playerPos, info.rot)
     }
   }
 }
 
-function startDisguise(pos: Vector3): void {
+function startDisguise(pos: Vector3, rot: number): void {
   isDisguised = true
   disguiseTimer = DISGUISE_DURATION
 
   // Hide doge body
-  if (dogeBodyEntity) {
+  if (dogeBodyEntity && Transform.getOrNull(dogeBodyEntity as Entity)) {
     const dogeTransform = Transform.getMutable(dogeBodyEntity)
     dogeTransform.position = Vector3.create(0, -10, 0)
     dogeTransform.scale = Vector3.create(0, 0, 0)
   }
 
-  // Show pillar at player position
-  if (pillarDisguiseEntity) {
+  // Show slab at player position, rotated to match the cover they are hiding near
+  if (pillarDisguiseEntity && Transform.getOrNull(pillarDisguiseEntity as Entity)) {
     const pillarTransform = Transform.getMutable(pillarDisguiseEntity)
     pillarTransform.position = Vector3.create(pos.x, 2, pos.z)
+    pillarTransform.rotation = Quaternion.fromEulerDegrees(0, rot, 0)
   }
 }
 
@@ -162,13 +161,13 @@ function endDisguise(): void {
   cooldownTimer = COOLDOWN_DURATION
 
   // Hide pillar
-  if (pillarDisguiseEntity) {
+  if (pillarDisguiseEntity && Transform.getOrNull(pillarDisguiseEntity as Entity)) {
     const pillarTransform = Transform.getMutable(pillarDisguiseEntity)
     pillarTransform.position = Vector3.create(0, -10, 0)
   }
 
   // Restore doge body (will be updated by follow system next frame)
-  if (dogeBodyEntity) {
+  if (dogeBodyEntity && Transform.getOrNull(dogeBodyEntity as Entity)) {
     const dogeTransform = Transform.getMutable(dogeBodyEntity)
     dogeTransform.scale = Vector3.create(1.5, 1.5, 1.5)
   }
@@ -177,4 +176,22 @@ function endDisguise(): void {
 /** Check if player is currently disguised (used by player follow system) */
 export function isPlayerDisguised(): boolean {
   return isDisguised
+}
+
+/** Clean up skill entities and reset skill state */
+export function cleanupSkills(): void {
+  if (pillarDisguiseEntity) {
+    engine.removeEntity(pillarDisguiseEntity as Entity)
+    pillarDisguiseEntity = 0
+  }
+
+  if (skillStatusEntity) {
+    engine.removeEntity(skillStatusEntity as Entity)
+    skillStatusEntity = 0
+  }
+
+  dogeBodyEntity = 0
+  isDisguised = false
+  disguiseTimer = 0
+  cooldownTimer = 0
 }

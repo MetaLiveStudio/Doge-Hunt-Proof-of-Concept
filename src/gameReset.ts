@@ -5,9 +5,10 @@
 import { engine, Entity } from '@dcl/sdk/ecs'
 import { NpcPatrol, NpcWaypoints, resetNpcCounters } from './npc'
 import { resetCombat } from './combat'
-import { resetRoundTimer } from './ui'
+import { cleanupWorldUi, resetRoundTimer } from './ui'
 import { resetGameOverFlag } from './index'
 import { cleanupPlayerDisguise } from './player'
+import { cleanupSkills } from './skills'
 
 let spawnedNpcs: Entity[] = []
 let arenaEntities: Entity[] = []
@@ -60,6 +61,8 @@ export function cleanupGame(): void {
   arenaEntities = []
 
   // Clean up player disguise
+  cleanupWorldUi()
+  cleanupSkills()
   cleanupPlayerDisguise()
 
   console.log('[Reset] Cleanup complete')

@@ -17,13 +17,14 @@ import { engine } from '@dcl/sdk/ecs'
 import { GameState, isPlaying } from './gameState'
 import { createLobby, startSinglePlayer, returnToLobby } from './lobby'
 import { buildArena } from './arena'
-import { spawnAllNpcs, npcPatrolSystem, aliveCount } from './npc'
-import { combatSystem, totalBonks } from './combat'
+import { spawnAllNpcs, npcPatrolSystem, aliveCount, resetNpcCounters, NPC_TOTAL } from './npc'
+import { combatSystem, totalBonks, resetCombat } from './combat'
 import {
   killFeedSystem,
   createBonkCounter,
   updateBonkCounter,
   createRoundTimer,
+  resetRoundTimer,
   roundTimerSystem,
   createAliveCounter,
   updateAliveCounter,
@@ -59,6 +60,12 @@ export function startGame() {
 
   console.log('[Game] Starting game...')
 
+  // Ensure stale values from a previous round don't trip game-over on start.
+  resetNpcCounters()
+  resetRoundTimer()
+  resetGameOverFlag()
+  resetCombat()
+
   // 1. Build the arena
   buildArena()
 
@@ -69,9 +76,6 @@ export function startGame() {
   setupPlayerDisguise()
 
   // 4. Setup UI
-  createBonkCounter()
-  createRoundTimer()
-  createAliveCounter(NPC_COUNT)
   setupHud()
 
   gameInitialized = true
@@ -126,11 +130,6 @@ export function main() {
 
   engine.addSystem((dt: number) => {
     if (!isPlaying()) return
-    killFeedSystem(dt)
-  })
-
-  engine.addSystem((dt: number) => {
-    if (!isPlaying()) return
     roundTimerSystem(dt)
   })
 
@@ -146,27 +145,14 @@ export function main() {
     }
   })
 
-  // 6. UI update system
-  let lastBonks = 0
-  let lastAlive = NPC_COUNT
+  // 6. Game over detection
   engine.addSystem(() => {
     if (!isPlaying()) return
-    if (totalBonks !== lastBonks) {
-      lastBonks = totalBonks
-      updateBonkCounter(totalBonks)
-    }
-    if (aliveCount !== lastAlive) {
-      lastAlive = aliveCount
-      updateAliveCounter(aliveCount)
-    }
-  })
-
-  // 7. Game over detection
-  engine.addSystem(() => {
-    if (!isPlaying()) return
+    if (!gameInitialized) return
+    if (NPC_TOTAL <= 0) return
     
     // Check if game should end
-    const shouldEnd = roundOver || aliveCount === 0
+    const shouldEnd = roundOver || aliveCount <= 0
     
     if (shouldEnd && !gameOverTriggered) {
       gameOverTriggered = true
