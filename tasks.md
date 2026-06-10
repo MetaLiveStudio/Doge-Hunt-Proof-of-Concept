@@ -22,12 +22,13 @@ This document records all development tasks and progress for the Doge Hunt proje
 | 2026-05-28 | Removed Floating Text Above NPCs/Players | Completed | AI Assistant | Cleaned up world UI labels for better immersion. |
 | 2026-05-28 | Fixed Game Over "Return to Lobby" Button | Completed | AI Assistant | Refactored UI click logic to fix broken button events and cleanup routines. |
 | 2026-05-28 | Replaced Procedural Arena with MoonLobby1.glb | Completed | AI Assistant | Switched to instantiating the lobby model as the arena base for better design. |
+| 2026-06-02 | Re-captured updated MoonLobby built-in colliders and aligned NPC collision rules | Completed | AI Assistant | Parsed `models/MoonLobby1.glb` and confirmed dedicated collider nodes (`Land_Collider`, `Starlight_Collider`, plus an extra `_Collider` mesh). Updated lobby/arena model loading to capture invisible collider meshes on `CL_PHYSICS`, and added forward obstacle raycasts for NPCs so they reroute when the environment blocks their path. |
 | 2026-05-28 | UI Text Logic Optimization | Completed | AI Assistant | Victory shows "Round Complete" & "You Win", failure shows "GAME OVER" & "You Lose". |
 | 2026-05-28 | HUD Panel Position Adjustment | Completed | AI Assistant | Moved main game HUD from the bottom-right corner to the center-left position (left: s(42)). |
 
 ## Current Plans / To-Do List
 - [ ] Continue manual playtesting to fine-tune `jump` duration and `Bonk` feel.
 - [ ] Monitor NPC state switching frequency (adjust `Bonk/jump` probability).
-- [ ] Investigate invisible walls/colliders in `MoonLobby1.glb` instance.
+- [ ] Verify the updated `MoonLobby1.glb` collider layout in playtests and trim any remaining false-positive wall hits.
 - [ ] Scale NPC patrol zones and skill triggers to match `1.5x` arena scale.
 - [ ] Refactor `uiManager.ts` to decouple state management from UI layout.

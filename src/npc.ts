@@ -33,6 +33,8 @@ export const NpcPatrol = engine.defineComponent('npcPatrol', {
   actionDuration: Schemas.Float,
   animationState: Schemas.Int,
   jumpHeight: Schemas.Float,
+  obstacleProbeEntity: Schemas.Int,
+  obstacleBlockedCooldown: Schemas.Float,
 })
 
 /** Stores the patrol waypoints per NPC (stored as flat array: x1,z1,x2,z2,...) */
@@ -55,6 +57,10 @@ export const NPC_HITBOX_SCALE = Vector3.create(3.2, 3.2, 3.2)
 export const NPC_DEAD_VISUAL_SCALE = Vector3.create(0.5, 0.5, 0.5)
 const NPC_GROUND_RAY_OFFSET = Vector3.create(0, 6, 0)
 const NPC_GROUND_RAY_MAX_DISTANCE = 20
+const NPC_OBSTACLE_PROBE_OFFSET = Vector3.create(0, 1.15, 0)
+const NPC_OBSTACLE_RAY_MAX_DISTANCE = 1.5
+const NPC_OBSTACLE_BLOCK_DISTANCE = 1.1
+const NPC_OBSTACLE_REROUTE_COOLDOWN = 0.35
 const NPC_IDLE_CLIP = 'idel'
 const NPC_WALK_CLIP = 'walk'
 const NPC_RUN_CLIP = 'run'
@@ -125,6 +131,23 @@ function createLabel(x: number, z: number): Entity {
 
 function randomRange(min: number, max: number): number {
   return min + Math.random() * (max - min)
+}
+
+function createNpcObstacleProbe(root: Entity): Entity {
+  const probe = engine.addEntity()
+  Transform.create(probe, {
+    parent: root,
+    position: NPC_OBSTACLE_PROBE_OFFSET,
+  })
+  Raycast.create(probe, {
+    originOffset: Vector3.create(0, 0, 0),
+    direction: { $case: 'globalDirection', globalDirection: Vector3.Forward() },
+    maxDistance: NPC_OBSTACLE_RAY_MAX_DISTANCE,
+    queryType: RaycastQueryType.RQT_HIT_FIRST,
+    continuous: true,
+    collisionMask: ColliderLayer.CL_PHYSICS,
+  })
+  return probe
 }
 
 function createNpcAnimator(visual: Entity): void {
@@ -407,6 +430,8 @@ function spawnNpc(id: number): Entity {
   GltfContainer.create(visual, { src: DOGE_MODEL })
   createNpcAnimator(visual)
 
+  const obstacleProbe = createNpcObstacleProbe(root)
+
   const hitbox = engine.addEntity()
   Transform.create(hitbox, {
     parent: root,
@@ -445,6 +470,8 @@ function spawnNpc(id: number): Entity {
     actionDuration: initialIdleDuration,
     animationState: -1,
     jumpHeight: randomRange(0.8, 1.1),
+    obstacleProbeEntity: obstacleProbe as number,
+    obstacleBlockedCooldown: 0,
   })
   syncNpcAnimation(root)
 
@@ -556,6 +583,7 @@ export function npcPatrolSystem(dt: number): void {
     }
     const direction = Vector3.subtract(target, groundedCurrent)
     const distance = Vector3.length(direction)
+    patrol.obstacleBlockedCooldown = Math.max(0, patrol.obstacleBlockedCooldown - dt)
 
     patrol.actionTimer = Math.max(0, patrol.actionTimer - dt)
     if (patrol.actionTimer <= 0) {
@@ -572,6 +600,18 @@ export function npcPatrolSystem(dt: number): void {
       chooseNpcAction(entity, 0)
     } else if (canMove && patrol.speed > 0.01) {
       const normalized = Vector3.normalize(direction)
+      updateNpcObstacleProbeDirection(entity, normalized)
+      const obstacleDistance = getObstacleDistance(entity)
+      if (obstacleDistance !== null && obstacleDistance <= NPC_OBSTACLE_BLOCK_DISTANCE) {
+        if (patrol.obstacleBlockedCooldown <= 0) {
+          patrol.obstacleBlockedCooldown = NPC_OBSTACLE_REROUTE_COOLDOWN
+          patrol.waypointIndex = (idx + 1) % waypoints.count
+          chooseNpcAction(entity, 0)
+        }
+        updateNpcVisualOffset(entity)
+        continue
+      }
+
       const step = patrol.speed * dt
       const nextPosition = Vector3.create(
         groundedCurrent.x + normalized.x * step,
@@ -612,4 +652,25 @@ function getGroundHeight(entity: Entity): number | null {
   const result = RaycastResult.getOrNull(entity)
   if (!result || result.hits.length === 0) return null
   return result.hits[0].position.y
+}
+
+function updateNpcObstacleProbeDirection(entity: Entity, normalizedDirection: Vector3): void {
+  const patrol = NpcPatrol.get(entity)
+  if (!patrol.obstacleProbeEntity) return
+  if (!Raycast.has(patrol.obstacleProbeEntity as Entity)) return
+
+  const probeRaycast = Raycast.getMutable(patrol.obstacleProbeEntity as Entity)
+  probeRaycast.direction = {
+    $case: 'globalDirection',
+    globalDirection: Vector3.create(normalizedDirection.x, 0, normalizedDirection.z),
+  }
+}
+
+function getObstacleDistance(entity: Entity): number | null {
+  const patrol = NpcPatrol.get(entity)
+  if (!patrol.obstacleProbeEntity) return null
+
+  const result = RaycastResult.getOrNull(patrol.obstacleProbeEntity as Entity)
+  if (!result || result.hits.length === 0) return null
+  return result.hits[0].length
 }

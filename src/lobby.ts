@@ -69,6 +69,8 @@ export function createLobby(): void {
   })
   GltfContainer.create(lobbyModelEntity, {
     src: 'models/MoonLobby1.glb',
+    // Prefer the model's dedicated collider meshes over the visible geometry.
+    invisibleMeshesCollisionMask: ColliderLayer.CL_PHYSICS,
   })
   VisibilityComponent.create(lobbyModelEntity, { visible: true })
 

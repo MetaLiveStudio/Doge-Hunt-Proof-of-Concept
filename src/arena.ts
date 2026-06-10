@@ -9,6 +9,7 @@ import {
   engine,
   GltfContainer,
   Transform,
+  ColliderLayer,
 } from '@dcl/sdk/ecs'
 import { Vector3 } from '@dcl/sdk/math'
 import { trackArenaEntity } from './gameReset'
@@ -35,6 +36,8 @@ export function buildArena(): void {
 
   GltfContainer.create(arenaModel, {
     src: ARENA_MODEL_SRC,
+    // The updated MoonLobby model ships dedicated collider meshes; only capture those.
+    invisibleMeshesCollisionMask: ColliderLayer.CL_PHYSICS,
   })
 
   trackArenaEntity(arenaRoot)
