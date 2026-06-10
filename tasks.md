@@ -22,6 +22,8 @@ This document records all development tasks and progress for the Doge Hunt proje
 | 2026-05-28 | Removed Floating Text Above NPCs/Players | Completed | AI Assistant | Cleaned up world UI labels for better immersion. |
 | 2026-05-28 | Fixed Game Over "Return to Lobby" Button | Completed | AI Assistant | Refactored UI click logic to fix broken button events and cleanup routines. |
 | 2026-05-28 | Replaced Procedural Arena with MoonLobby1.glb | Completed | AI Assistant | Switched to instantiating the lobby model as the arena base for better design. |
+| 2026-05-28 | UI Text Logic Optimization | Completed | AI Assistant | Victory shows "Round Complete" & "You Win", failure shows "GAME OVER" & "You Lose". |
+| 2026-05-28 | HUD Panel Position Adjustment | Completed | AI Assistant | Moved main game HUD from the bottom-right corner to the center-left position (left: s(42)). |
 
 ## Current Plans / To-Do List
 - [ ] Continue manual playtesting to fine-tune `jump` duration and `Bonk` feel.
