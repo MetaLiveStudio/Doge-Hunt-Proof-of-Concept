@@ -20,6 +20,8 @@ import { enableFollowCamera, disableFollowCamera } from './cameraRig'
 // Lobby position
 const LOBBY_X = 48
 const LOBBY_Z = 48
+const LOBBY_RETURN_X = 48
+const LOBBY_RETURN_Z = 54
 const LOBBY_HIDDEN_X = 1000
 const LOBBY_HIDDEN_Y = -100
 const LOBBY_HIDDEN_Z = 1000
@@ -173,9 +175,9 @@ export function returnToLobby(): void {
   setLobbyVisible(true)
   disableFollowCamera()
   movePlayerTo({
-    newRelativePosition: { x: LOBBY_X, y: PLAYER_SPAWN_Y, z: LOBBY_Z },
+    newRelativePosition: { x: LOBBY_RETURN_X, y: PLAYER_SPAWN_Y, z: LOBBY_RETURN_Z },
   })
-  console.log('[Lobby] Player moved back to lobby center')
+  console.log('[Lobby] Player moved back to lobby return point')
 
   // Reset state
   console.log('[Lobby] Step 4: Resetting UI state...')

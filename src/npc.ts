@@ -651,7 +651,9 @@ export function npcPatrolSystem(dt: number): void {
 function getGroundHeight(entity: Entity): number | null {
   const result = RaycastResult.getOrNull(entity)
   if (!result || result.hits.length === 0) return null
-  return result.hits[0].position.y
+  const hit = result.hits[0]
+  if (!hit || !hit.position) return null
+  return hit.position.y
 }
 
 function updateNpcObstacleProbeDirection(entity: Entity, normalizedDirection: Vector3): void {
@@ -672,5 +674,7 @@ function getObstacleDistance(entity: Entity): number | null {
 
   const result = RaycastResult.getOrNull(patrol.obstacleProbeEntity as Entity)
   if (!result || result.hits.length === 0) return null
-  return result.hits[0].length
+  const hit = result.hits[0]
+  if (!hit) return null
+  return hit.length
 }

@@ -33,7 +33,7 @@ export let totalBonks = 0
 
 const ATTACK_MIN_FORWARD = 0.25
 const ATTACK_RANGE = 2.9
-const ATTACK_RADIUS = 1.6
+const ATTACK_RADIUS = 1.92
 const ATTACK_HIT_WINDOW_SECONDS = 0.12
 const COMBAT_START_INPUT_GRACE_SECONDS = 0.2
 
@@ -47,6 +47,15 @@ export function resetCombat(): void {
   attackElapsed = PLAYER_ATTACK_TOTAL_DURATION
   hasHitThisSwing = false
   startInputGraceTimer = COMBAT_START_INPUT_GRACE_SECONDS
+}
+
+export function triggerPlayerBonkAttack(): boolean {
+  if (startInputGraceTimer > 0) return false
+
+  attackElapsed = 0
+  hasHitThisSwing = false
+  playPlayerAttackAnimation()
+  return true
 }
 
 /** Knockback an NPC and swap to dead model */
@@ -129,9 +138,7 @@ export function combatSystem(dt: number): void {
   }
 
   if (inputSystem.isTriggered(InputAction.IA_POINTER, PointerEventType.PET_DOWN)) {
-    attackElapsed = 0
-    hasHitThisSwing = false
-    playPlayerAttackAnimation()
+    triggerPlayerBonkAttack()
   }
 
   if (attackElapsed >= PLAYER_ATTACK_TOTAL_DURATION) return

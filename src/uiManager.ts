@@ -3,6 +3,10 @@
  */
 import ReactEcs, { ReactEcsRenderer, UiEntity, Label, Button } from '@dcl/sdk/react-ecs'
 import { Color4 } from '@dcl/sdk/math'
+import { isMobile } from '@dcl/sdk/platform'
+import { killAllNpcs } from './npc'
+import { triggerPlayerBonkAttack } from './combat'
+import { triggerTurnToRock, getTurnToRockHudState } from './skills'
 
 const h = ReactEcs.createElement
 
@@ -130,6 +134,18 @@ function renderGameOverUI() {
   const titleText = isWin ? 'Round Complete' : 'GAME OVER'
   const subtitleText = isWin ? 'You Win' : 'You Lose'
   const titleColor = isWin ? Color4.create(0.22, 1, 0.08, 1) : Color4.create(1, 0.2, 0.2, 1)
+  const handleReturnToLobby = () => {
+    console.log('[UI] Return to Lobby button clicked')
+    console.log('[UI] onReturnToLobby exists?', !!onReturnToLobby)
+    uiState.showGameOver = false
+
+    if (onReturnToLobby) {
+      console.log('[UI] Calling onReturnToLobby...')
+      onReturnToLobby()
+    } else {
+      console.log('[UI] ERROR: onReturnToLobby is null!')
+    }
+  }
 
   return h(UiEntity, {
     key: 'gameOverOverlay',
@@ -152,10 +168,6 @@ function renderGameOverUI() {
         zIndex: 0,
       },
       uiBackground: { color: Color4.create(0, 0, 0, 0.7) },
-      onMouseDown: () => {
-        console.log('[UI] Game over overlay clicked, closing modal')
-        uiState.showGameOver = false
-      },
     }),
     h(UiEntity, {
       key: 'gameOverModal',
@@ -221,17 +233,7 @@ function renderGameOverUI() {
           color: Color4.create(1, 1, 1, 1),
           textAlign: 'middle-center',
         },
-        onMouseDown: () => {
-          console.log('[UI] Return to Lobby button clicked')
-          console.log('[UI] onReturnToLobby exists?', !!onReturnToLobby)
-          uiState.showGameOver = false
-          if (onReturnToLobby) {
-            console.log('[UI] Calling onReturnToLobby...')
-            onReturnToLobby()
-          } else {
-            console.log('[UI] ERROR: onReturnToLobby is null!')
-          }
-        },
+        onMouseDown: handleReturnToLobby,
       }),
     ]),
   ])
@@ -264,8 +266,18 @@ function renderHUD() {
   
   const timeColor = (data.timeLeft <= 30 && !data.roundOver) ? RED : CYAN
   const aliveColor = data.alive <= 3 ? RED : data.alive <= 6 ? GOLD : GREEN
+  const rockHudState = getTurnToRockHudState()
+  const rockIsReady = rockHudState.statusLabel === 'Ready'
+  const rockIsActive = rockHudState.statusLabel.startsWith('Active:')
+  const rockButtonBg = rockIsReady
+    ? Color4.create(0.14, 0.14, 0.2, 0.95)
+    : rockIsActive
+      ? Color4.create(0.08, 0.28, 0.12, 0.95)
+      : Color4.create(0.28, 0.18, 0.08, 0.95)
+  const rockStatusColor = rockIsReady ? GREEN : rockIsActive ? GREEN : GOLD
   
   const panel = h(UiEntity, {
+    key: 'hudPanel',
     uiTransform: {
       width: s(320),
       height: s(320),
@@ -359,8 +371,8 @@ function renderHUD() {
     }),
   ])
 
-  const eKeyHint = h(UiEntity, {
-    key: 'eKeyHintWrap',
+  const actionButtons = h(UiEntity, {
+    key: 'actionWrap',
     uiTransform: {
       positionType: 'absolute',
       position: { left: 0, right: 0, bottom: es(18) },
@@ -370,55 +382,61 @@ function renderHUD() {
       justifyContent: 'center',
     },
   }, [
-    h(UiEntity, {
-      key: 'eKeyHintPill',
+    ...(isMobile() ? [h(Button, {
+      key: 'mobileBonkButton',
+      value: 'BONK',
+      variant: 'primary',
+      fontSize: es(16),
       uiTransform: {
-        height: es(76),
-        flexDirection: 'row',
-        alignItems: 'center',
-        padding: { left: es(12), right: es(14), top: es(10), bottom: es(10) },
+        width: es(168),
+        height: es(54),
+        margin: { right: es(8) },
       },
-      uiBackground: { color: BG },
+      onMouseDown: () => {
+        triggerPlayerBonkAttack()
+      },
+    })] : []),
+    h(UiEntity, {
+      key: 'rockButton',
+      uiTransform: {
+        width: es(220),
+        height: es(64),
+        padding: { top: es(8), bottom: es(8), left: es(10), right: es(10) },
+        justifyContent: 'center',
+        alignItems: 'center',
+      },
+      uiBackground: { color: rockButtonBg },
+      onMouseDown: rockHudState.enabled ? () => {
+        triggerTurnToRock()
+      } : undefined,
     }, [
-      h(UiEntity, {
-        key: 'eKeyBox',
+      h(Label, {
+        key: 'rockButtonTitle',
+        value: rockHudState.enabled
+          ? (isMobile() ? 'Turn to Rock' : 'Turn to Rock [E]')
+          : rockHudState.buttonLabel,
+        fontSize: es(12),
+        color: Color4.White(),
         uiTransform: {
-          width: es(40),
-          height: es(40),
-          flexDirection: 'column',
-          alignItems: 'center',
-          justifyContent: 'center',
-          margin: { right: es(12) },
+          width: '100%',
+          height: es(20),
+          margin: { bottom: es(2) },
         },
-        uiBackground: { color: BUTTON_BG },
-      }, [
-        h(Label, {
-          key: 'eKeyText',
-          value: 'E',
-          fontSize: es(18),
-          color: CYAN,
-          uiTransform: { height: es(22) },
-        }),
-      ]),
-      h(UiEntity, {
-        key: 'eKeyCopy',
-        uiTransform: { flexDirection: 'column' },
-      }, [
-        h(Label, {
-          key: 'eKeyTitle',
-          value: 'Rock Solid — New skills coming soon!',
-          fontSize: es(12),
-          color: CYAN,
-          uiTransform: { height: es(18), margin: { bottom: es(3) } },
-        }),
-        h(Label, {
-          key: 'eKeyDesc',
-          value: 'Press E near a pillar to hide as a pillar (5s / 15s).',
-          fontSize: es(10),
-          color: WHITE,
-          uiTransform: { height: es(16) },
-        }),
-      ]),
+        textAlign: 'middle-center',
+      }),
+      h(Label, {
+        key: 'rockButtonStatus',
+        value: rockHudState.enabled
+          ? 'Ready'
+          : rockHudState.statusLabel,
+        fontSize: es(10),
+        color: rockStatusColor,
+        uiTransform: {
+          width: '100%',
+          height: es(16),
+        },
+        textAlign: 'middle-center',
+      }),
     ]),
   ])
 
@@ -439,11 +457,14 @@ function renderHUD() {
       fontSize: 14,
       onMouseDown: () => {
         console.log('[DEBUG] Kill All button clicked')
-        const { killAllNpcs } = require('./npc')
         killAllNpcs()
       },
     }),
   ])
+
+  const children = [panel]
+  children.push(actionButtons)
+  children.push(debugButton)
 
   return h(UiEntity, {
     uiTransform: {
@@ -452,5 +473,5 @@ function renderHUD() {
       positionType: 'absolute',
       position: { left: 0, top: 0 },
     },
-  }, [panel, eKeyHint, debugButton])
+  }, children)
 }
