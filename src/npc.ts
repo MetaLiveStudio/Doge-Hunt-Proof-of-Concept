@@ -11,6 +11,7 @@ import {
 import { Vector3, Color4 } from '@dcl/sdk/math'
 import { trackNpc } from './gameReset'
 import { PLAYER_RUN_SPEED, PLAYER_WALK_SPEED } from './player'
+import { getLocalPublicDogeState, recordLocalDogeEliminated } from './localMatchState'
 
 // --- Custom components ---
 
@@ -96,10 +97,33 @@ const NPC_LABEL_FONT_SIZE = 3
 export let aliveCount = 0
 export let NPC_TOTAL = 0
 
+const npcPublicDogeIds = new Map<Entity, string>()
+
 /** Reset NPC counters */
 export function resetNpcCounters(): void {
   aliveCount = 0
   NPC_TOTAL = 0
+  npcPublicDogeIds.clear()
+}
+
+export function getNpcPublicDogeId(entity: Entity): string | null {
+  return npcPublicDogeIds.get(entity) ?? null
+}
+
+export function applyNpcPublicDogePresentation(publicDogeId: string | null, hitOrigin: Vector3): boolean {
+  if (!publicDogeId) return false
+
+  const publicDoge = getLocalPublicDogeState(publicDogeId)
+  if (!publicDoge || publicDoge.visualState !== 'eliminated') return false
+
+  const npcRoot = getNpcByPublicDogeId(publicDogeId)
+  if (!npcRoot || !NpcPatrol.has(npcRoot)) return false
+
+  const patrol = NpcPatrol.get(npcRoot)
+  if (patrol.isKnockedOut || patrol.isBeingEliminated) return false
+
+  startNpcElimination(npcRoot, hitOrigin)
+  return true
 }
 
 /** Generate random waypoints within the arena */
@@ -481,11 +505,17 @@ function spawnNpc(id: number): Entity {
 }
 
 /** Spawn all NPC Doges */
-export function spawnAllNpcs(count: number = 8): Entity[] {
+export function spawnAllNpcs(count: number = 8, publicDogeIds: string[] = []): Entity[] {
   NPC_TOTAL = count
+  npcPublicDogeIds.clear()
   const npcs: Entity[] = []
   for (let i = 0; i < count; i++) {
-    npcs.push(spawnNpc(i))
+    const npc = spawnNpc(i)
+    const publicDogeId = publicDogeIds[i]
+    if (publicDogeId) {
+      npcPublicDogeIds.set(npc, publicDogeId)
+    }
+    npcs.push(npc)
   }
   return npcs
 }
@@ -501,6 +531,7 @@ export function killAllNpcs(): void {
   for (const [entity] of engine.getEntitiesWith(NpcPatrol, Transform)) {
     const patrol = NpcPatrol.getMutable(entity)
     if (patrol.isKnockedOut) continue
+    recordLocalDogeEliminated(getNpcPublicDogeId(entity as Entity))
     
     // Mark as dead
     patrol.isBeingEliminated = false
@@ -529,6 +560,16 @@ export function killAllNpcs(): void {
 }
 
 /** NPC patrol system — moves NPCs between waypoints, updates label position */
+function getNpcByPublicDogeId(publicDogeId: string): Entity | null {
+  for (const [entity, mappedPublicDogeId] of npcPublicDogeIds.entries()) {
+    if (mappedPublicDogeId === publicDogeId) {
+      return entity
+    }
+  }
+
+  return null
+}
+
 export function npcPatrolSystem(dt: number): void {
   for (const [entity] of engine.getEntitiesWith(NpcPatrol, NpcWaypoints, Transform)) {
     const patrol = NpcPatrol.getMutable(entity)

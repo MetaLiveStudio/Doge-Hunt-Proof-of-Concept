@@ -12,6 +12,13 @@ import {
 import { Vector3, Quaternion, Color4 } from '@dcl/sdk/math'
 import { movePlayerTo } from '~system/RestrictedActions'
 import { setSkillMovementLocked } from './player'
+import {
+  recordLocalTurnToRockActivated,
+  recordLocalTurnToRockCooldown,
+  recordLocalTurnToRockEnded,
+} from './localMatchState'
+import { requestTurnToRock, setGameplayResolvers } from './gameResolvers'
+import type { TurnToRockRequest, TurnToRockResult } from './gameResolvers'
 
 const CX = 48
 const CZ = 48
@@ -30,6 +37,8 @@ let dogeBodyEntity: Entity | undefined
 let pillarDisguiseEntity: Entity | undefined
 let skillStatusEntity: Entity | undefined
 let disguiseReturnPosition: Vector3 | null = null
+
+const LOCAL_PLAYER_ID = 'local-player'
 
 export type TurnToRockHudState = {
   buttonLabel: string
@@ -99,6 +108,7 @@ export function skillSystem(dt: number): void {
   // Handle cooldown
   if (cooldownTimer > 0) {
     cooldownTimer -= dt
+    recordLocalTurnToRockCooldown(LOCAL_PLAYER_ID, Math.max(0, cooldownTimer))
     return
   }
 
@@ -108,11 +118,53 @@ export function skillSystem(dt: number): void {
 }
 
 export function triggerTurnToRock(): boolean {
-  const playerTransform = Transform.getOrNull(engine.PlayerEntity)
-  if (!playerTransform) return false
-  if (isDisguised || cooldownTimer > 0) return false
+  const result = requestTurnToRock({ playerId: LOCAL_PLAYER_ID })
+  return applyTurnToRockResult(result)
+}
 
-  startDisguise(playerTransform.position, getYawFromRotation(playerTransform.rotation))
+function resolveLocalTurnToRock(request: TurnToRockRequest): TurnToRockResult {
+  const playerTransform = Transform.getOrNull(engine.PlayerEntity)
+  if (!playerTransform) {
+    return {
+      outcome: 'rejected',
+      reason: 'missing-player-transform',
+      request,
+    }
+  }
+
+  if (isDisguised) {
+    return {
+      outcome: 'rejected',
+      reason: 'already-active',
+      request,
+    }
+  }
+
+  if (cooldownTimer > 0) {
+    return {
+      outcome: 'rejected',
+      reason: 'cooldown',
+      request,
+    }
+  }
+
+  return {
+    outcome: 'activated',
+    request,
+    position: playerTransform.position,
+    yawDegrees: getYawFromRotation(playerTransform.rotation),
+    durationSeconds: DISGUISE_DURATION,
+    cooldownSeconds: COOLDOWN_DURATION,
+  }
+}
+
+setGameplayResolvers({ resolveTurnToRock: resolveLocalTurnToRock })
+
+function applyTurnToRockResult(result: TurnToRockResult): boolean {
+  if (result.outcome === 'rejected') return false
+
+  recordLocalTurnToRockActivated(result.request.playerId)
+  startDisguise(result.position, result.yawDegrees)
   return true
 }
 
@@ -146,6 +198,7 @@ function endDisguise(): void {
   const returnPosition = disguiseReturnPosition
   isDisguised = false
   cooldownTimer = COOLDOWN_DURATION
+  recordLocalTurnToRockEnded(LOCAL_PLAYER_ID, COOLDOWN_DURATION)
 
   // Hide pillar
   if (pillarDisguiseEntity && Transform.getOrNull(pillarDisguiseEntity)) {

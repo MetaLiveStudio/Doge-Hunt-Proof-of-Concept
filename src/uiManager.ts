@@ -7,29 +7,40 @@ import { isMobile } from '@dcl/sdk/platform'
 import { killAllNpcs } from './npc'
 import { triggerPlayerBonkAttack } from './combat'
 import { triggerTurnToRock, getTurnToRockHudState } from './skills'
+import {
+  addLocalFakePlayer,
+  createLocalRoom,
+  getLocalRoomSnapshot,
+  leaveLocalRoom,
+  removeLocalFakePlayer,
+  startLocalRoomMatch,
+} from './localRoom'
+import { startLocalMatch } from './localMatch'
+import type { LocalMatchConfig } from './localMatch'
 
 const h = ReactEcs.createElement
 
 // UI state
 export const uiState = {
-  showModeSelection: false,
+  showRoomEntry: false,
+  showWaitingRoom: false,
   showGameOver: false,
   showHud: false,
 }
 
 // Callbacks (set by other modules)
-export let onStartSinglePlayer: (() => void) | null = null
+export let onStartLocalMatch: ((matchConfig: LocalMatchConfig) => void) | null = null
 export let onReturnToLobby: (() => void) | null = null
 export let getGameStats: (() => { bonks: number; alive: number; total: number; time: string }) | null = null
 export let getHudData: (() => { bonks: number; alive: number; total: number; timeLeft: number; roundOver: boolean }) | null = null
 
 export function setCallbacks(callbacks: {
-  onStartSinglePlayer?: () => void
+  onStartLocalMatch?: (matchConfig: LocalMatchConfig) => void
   onReturnToLobby?: () => void
   getGameStats?: () => { bonks: number; alive: number; total: number; time: string }
   getHudData?: () => { bonks: number; alive: number; total: number; timeLeft: number; roundOver: boolean }
 }) {
-  if (callbacks.onStartSinglePlayer) onStartSinglePlayer = callbacks.onStartSinglePlayer
+  if (callbacks.onStartLocalMatch) onStartLocalMatch = callbacks.onStartLocalMatch
   if (callbacks.onReturnToLobby) onReturnToLobby = callbacks.onReturnToLobby
   if (callbacks.getGameStats) getGameStats = callbacks.getGameStats
   if (callbacks.getHudData) getHudData = callbacks.getHudData
@@ -40,13 +51,17 @@ export function setupUI(): void {
   console.log('[UI] Setting up unified UI renderer...')
   
   const uiComponent = () => {
-    // Priority: Game Over > Mode Selection > HUD
+    // Priority: Game Over > Waiting Room > Room Entry > HUD
     if (uiState.showGameOver) {
       return renderGameOverUI()
     }
+
+    if (uiState.showWaitingRoom) {
+      return renderWaitingRoomUI()
+    }
     
-    if (uiState.showModeSelection) {
-      return renderModeSelectionUI()
+    if (uiState.showRoomEntry) {
+      return renderRoomEntryUI()
     }
     
     if (uiState.showHud) {
@@ -59,8 +74,8 @@ export function setupUI(): void {
   ReactEcsRenderer.setUiRenderer(uiComponent)
 }
 
-/** Render mode selection UI */
-function renderModeSelectionUI() {
+/** Render local room entry UI */
+function renderRoomEntryUI() {
   return h(UiEntity, {
     uiTransform: {
       width: '100%',
@@ -76,8 +91,8 @@ function renderModeSelectionUI() {
     h(UiEntity, {
       key: 'modal',
       uiTransform: {
-        width: 500,
-        height: 350,
+        width: 520,
+        height: 340,
         flexDirection: 'column',
         alignItems: 'center',
         justifyContent: 'center',
@@ -87,30 +102,37 @@ function renderModeSelectionUI() {
     }, [
       h(Label, {
         key: 'title',
-        value: 'SELECT GAME MODE',
+        value: 'DOGE HUNT ROOM',
         fontSize: 24,
         color: Color4.create(1, 0.84, 0, 1),
-        uiTransform: { height: 40, margin: { bottom: 30 } },
+        uiTransform: { height: 40, margin: { bottom: 14 } },
+      }),
+      h(Label, {
+        key: 'status',
+        value: 'No active room',
+        fontSize: 18,
+        color: Color4.create(0, 0.96, 1, 1),
+        uiTransform: { height: 30, margin: { bottom: 8 } },
+      }),
+      h(Label, {
+        key: 'description',
+        value: 'Create a room to start the current match.',
+        fontSize: 15,
+        color: Color4.create(0.8, 0.8, 0.8, 1),
+        uiTransform: { height: 28, margin: { bottom: 24 } },
       }),
       h(Button, {
-        key: 'singleplayer',
-        value: 'SINGLE PLAYER',
+        key: 'createRoom',
+        value: 'CREATE ROOM',
         variant: 'primary',
         uiTransform: { width: 300, height: 60, margin: { bottom: 20 } },
         fontSize: 18,
         onMouseDown: () => {
-          console.log('[UI] Single player clicked')
-          uiState.showModeSelection = false
-          if (onStartSinglePlayer) onStartSinglePlayer()
+          console.log('[UI] Create local room clicked')
+          createLocalRoom()
+          uiState.showRoomEntry = false
+          uiState.showWaitingRoom = true
         },
-      }),
-      h(Button, {
-        key: 'multiplayer',
-        value: 'MULTIPLAYER (Coming Soon)',
-        variant: 'secondary',
-        disabled: true,
-        uiTransform: { width: 300, height: 60, margin: { bottom: 20 } },
-        fontSize: 18,
       }),
       h(Button, {
         key: 'cancel',
@@ -120,7 +142,179 @@ function renderModeSelectionUI() {
         fontSize: 16,
         onMouseDown: () => {
           console.log('[UI] Cancel clicked')
-          uiState.showModeSelection = false
+          uiState.showRoomEntry = false
+        },
+      }),
+    ]),
+  ])
+}
+
+/** Render local waiting room UI */
+function renderWaitingRoomUI() {
+  const room = getLocalRoomSnapshot()
+  const playerRows = room.players.map((player, index) => {
+    const statusText = player.isHost
+      ? 'HOST'
+      : player.isSimulated
+        ? 'SIM READY'
+        : player.isReady
+          ? 'READY'
+          : 'WAITING'
+    const statusColor = player.isHost
+      ? Color4.create(1, 0.84, 0, 1)
+      : player.isReady
+        ? Color4.create(0.22, 1, 0.08, 1)
+        : Color4.create(0.8, 0.8, 0.8, 1)
+
+    return h(UiEntity, {
+      key: `player-${player.id}-${index}`,
+      uiTransform: {
+        width: '100%',
+        height: 42,
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        padding: { left: 18, right: 18 },
+        margin: { bottom: 8 },
+      },
+      uiBackground: { color: Color4.create(0.12, 0.12, 0.18, 0.95) },
+    }, [
+      h(Label, {
+        key: 'name',
+        value: player.isSimulated ? `${player.displayName} (SIM)` : player.displayName,
+        fontSize: 16,
+        color: Color4.White(),
+        uiTransform: { width: 220, height: 28 },
+      }),
+      h(Label, {
+        key: 'status',
+        value: statusText,
+        fontSize: 14,
+        color: statusColor,
+        textAlign: 'middle-right',
+        uiTransform: { width: 120, height: 28 },
+      }),
+    ])
+  })
+
+  return h(UiEntity, {
+    uiTransform: {
+      width: '100%',
+      height: '100%',
+      positionType: 'absolute',
+      position: { left: 0, top: 0 },
+      flexDirection: 'column',
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+    uiBackground: { color: Color4.create(0, 0, 0, 0.85) },
+  }, [
+    h(UiEntity, {
+      key: 'modal',
+      uiTransform: {
+        width: 600,
+        height: 590,
+        flexDirection: 'column',
+        alignItems: 'center',
+        justifyContent: 'center',
+        padding: { top: 28, bottom: 28, left: 40, right: 40 },
+      },
+      uiBackground: { color: Color4.create(0.08, 0.08, 0.12, 0.95) },
+    }, [
+      h(Label, {
+        key: 'title',
+        value: 'WAITING ROOM',
+        fontSize: 24,
+        color: Color4.create(1, 0.84, 0, 1),
+        uiTransform: { height: 38, margin: { bottom: 8 } },
+      }),
+      h(Label, {
+        key: 'players',
+        value: `Players ${room.playerCount}/${room.maxPlayers}`,
+        fontSize: 20,
+        color: Color4.create(0, 0.96, 1, 1),
+        uiTransform: { height: 32, margin: { bottom: 8 } },
+      }),
+      h(Label, {
+        key: 'host',
+        value: `Host: ${room.hostDisplayName || 'None'}`,
+        fontSize: 14,
+        color: Color4.create(0.8, 0.8, 0.8, 1),
+        uiTransform: { height: 24, margin: { bottom: 16 } },
+      }),
+      h(UiEntity, {
+        key: 'playerList',
+        uiTransform: {
+          width: '100%',
+          height: 200,
+          flexDirection: 'column',
+          margin: { bottom: 16 },
+        },
+      }, playerRows),
+      h(UiEntity, {
+        key: 'fakePlayerControls',
+        uiTransform: {
+          width: '100%',
+          height: 48,
+          flexDirection: 'row',
+          alignItems: 'center',
+          justifyContent: 'center',
+          margin: { bottom: 18 },
+        },
+      }, [
+        h(Button, {
+          key: 'addFakePlayer',
+          value: 'ADD FAKE',
+          variant: 'secondary',
+          disabled: !room.canAddFakePlayer,
+          uiTransform: { width: 210, height: 44, margin: { right: 12 } },
+          fontSize: 15,
+          onMouseDown: () => {
+            if (!room.canAddFakePlayer) return
+            console.log('[UI] Add local fake player clicked')
+            addLocalFakePlayer()
+          },
+        }),
+        h(Button, {
+          key: 'removeFakePlayer',
+          value: 'REMOVE FAKE',
+          variant: 'secondary',
+          disabled: !room.canRemoveFakePlayer,
+          uiTransform: { width: 210, height: 44 },
+          fontSize: 15,
+          onMouseDown: () => {
+            if (!room.canRemoveFakePlayer) return
+            console.log('[UI] Remove local fake player clicked')
+            removeLocalFakePlayer()
+          },
+        }),
+      ]),
+      h(Button, {
+        key: 'start',
+        value: 'START',
+        variant: 'primary',
+        disabled: !room.canHostStart,
+        uiTransform: { width: 300, height: 58, margin: { bottom: 14 } },
+        fontSize: 18,
+        onMouseDown: () => {
+          if (!room.canHostStart) return
+          console.log('[UI] Start local room match clicked')
+          const activeRoom = startLocalRoomMatch()
+          const matchConfig = startLocalMatch(activeRoom)
+          uiState.showWaitingRoom = false
+          if (onStartLocalMatch) onStartLocalMatch(matchConfig)
+        },
+      }),
+      h(Button, {
+        key: 'leave',
+        value: 'LEAVE',
+        variant: 'secondary',
+        uiTransform: { width: 220, height: 50 },
+        fontSize: 16,
+        onMouseDown: () => {
+          console.log('[UI] Leave local room clicked')
+          leaveLocalRoom()
+          uiState.showWaitingRoom = false
         },
       }),
     ]),

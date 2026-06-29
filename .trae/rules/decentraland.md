@@ -13,6 +13,13 @@ We are developing **Doge Hunt**, a Decentraland-based mobile game. Our goal is t
    - Do not launch preview mode without explicit authorization.
    - Previewing and verification are handled manually by designated personnel.
 
+3. **Incremental migration is mandatory**
+   - The long-term product direction is multiplayer Doge Hunt, but implementation must move in small, reversible phases.
+   - Each phase should keep the current single-player build runnable unless the user explicitly approves a larger breaking change.
+   - Do not introduce or modify authoritative multiplayer server code, `authoritativeMultiplayer`, `isServer()`, `registerMessages()`, server runtime dependencies, or server/client entry splitting unless the user explicitly asks for that phase.
+   - Prefer first implementing multiplayer-shaped concepts locally, such as room state, player count, ready/start UI, and match lifecycle, using the existing single-player runtime.
+   - After each phase, verify with build/type checks. Do not depend on preview to discover basic compile or integration failures.
+
 ## Technical Specifications
 
 1. **SDK and UI**
@@ -27,6 +34,8 @@ We are developing **Doge Hunt**, a Decentraland-based mobile game. Our goal is t
 3. **Architecture**
    - Follow data-driven design: logic in systems, state in components.
    - Keep code modular and extract shared behavior into utilities or dedicated systems.
+   - Keep gameplay lifecycle state explicit and easy to inspect before moving it to real networking.
+   - Avoid large cross-cutting rewrites when a narrower local-state change can validate the same product behavior.
 
 ## Reference Resources
 
