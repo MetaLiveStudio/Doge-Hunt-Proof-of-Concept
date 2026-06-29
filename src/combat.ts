@@ -8,8 +8,17 @@ import {
   PointerEventType, inputSystem,
 } from '@dcl/sdk/ecs'
 import { Vector3 } from '@dcl/sdk/math'
-import { NpcPatrol, aliveCount, startNpcElimination } from './npc'
+import {
+  NpcPatrol,
+  aliveCount,
+  applyNpcPublicDogePresentation,
+  getNpcPublicDogeId,
+  startNpcElimination,
+} from './npc'
 import { addKillFeedMessage } from './ui'
+import { recordLocalBonkHit } from './localMatchState'
+import { requestBonk, setGameplayResolvers } from './gameResolvers'
+import type { BonkRequest, BonkResult } from './gameResolvers'
 import {
   playPlayerAttackAnimation,
   PLAYER_ATTACK_IMPACT_TIME,
@@ -41,6 +50,8 @@ let attackElapsed = PLAYER_ATTACK_TOTAL_DURATION
 let hasHitThisSwing = false
 let startInputGraceTimer = 0
 
+const LOCAL_PLAYER_ID = 'local-player'
+
 /** Reset combat state */
 export function resetCombat(): void {
   totalBonks = 0
@@ -58,12 +69,14 @@ export function triggerPlayerBonkAttack(): boolean {
   return true
 }
 
-/** Knockback an NPC and swap to dead model */
-function knockbackNpc(npcRoot: Entity, hitOrigin: Vector3): void {
+/** Apply the visual/counter side effects for an accepted BONK result. */
+function applyNpcBonkPresentation(npcRoot: Entity, hitOrigin: Vector3, publicDogeId: string | null): boolean {
   const patrol = NpcPatrol.get(npcRoot)
-  if (patrol.isKnockedOut || patrol.isBeingEliminated) return
+  if (patrol.isKnockedOut || patrol.isBeingEliminated) return false
 
-  startNpcElimination(npcRoot, hitOrigin)
+  if (!applyNpcPublicDogePresentation(publicDogeId, hitOrigin)) {
+    startNpcElimination(npcRoot, hitOrigin)
+  }
 
   // Update counters
   totalBonks++
@@ -76,7 +89,9 @@ function knockbackNpc(npcRoot: Entity, hitOrigin: Vector3): void {
   if (aliveCount <= 1) {
     addKillFeedMessage('🎉 ALL DOGES ELIMINATED! 🎉')
   }
+  return true
 }
+
 function tryGetAttackPose(): { origin: Vector3; forward: Vector3 } | null {
   const playerTransform = Transform.getOrNull(engine.PlayerEntity)
   if (!playerTransform) return null
@@ -97,7 +112,34 @@ function tryGetAttackPose(): { origin: Vector3; forward: Vector3 } | null {
   return { origin, forward }
 }
 
-function tryHitNpcInFront(origin: Vector3, forward: Vector3): boolean {
+function resolveLocalBonk(request: BonkRequest): BonkResult {
+  const targetNpc = findBestNpcInFront(request.origin, request.forward)
+
+  if (!targetNpc) {
+    return {
+      outcome: 'miss',
+      request,
+    }
+  }
+
+  return {
+    outcome: 'hit-npc',
+    request,
+    targetNpc,
+  }
+}
+
+setGameplayResolvers({ resolveBonk: resolveLocalBonk })
+
+function applyBonkResult(result: BonkResult): boolean {
+  if (result.outcome === 'miss') return false
+
+  const publicDogeId = getNpcPublicDogeId(result.targetNpc)
+  recordLocalBonkHit(publicDogeId)
+  return applyNpcBonkPresentation(result.targetNpc, result.request.origin, publicDogeId)
+}
+
+function findBestNpcInFront(origin: Vector3, forward: Vector3): Entity | null {
   let bestTarget: Entity | null = null
   let bestDistance = Number.POSITIVE_INFINITY
 
@@ -124,10 +166,7 @@ function tryHitNpcInFront(origin: Vector3, forward: Vector3): boolean {
     }
   }
 
-  if (!bestTarget) return false
-
-  knockbackNpc(bestTarget, origin)
-  return true
+  return bestTarget
 }
 
 /** Combat system — tap anywhere to swing, hit only when an NPC is inside the attack zone */
@@ -151,7 +190,13 @@ export function combatSystem(dt: number): void {
   const attackPose = tryGetAttackPose()
   if (!attackPose) return
 
-  if (tryHitNpcInFront(attackPose.origin, attackPose.forward)) {
+  const bonkResult = requestBonk({
+    attackerPlayerId: LOCAL_PLAYER_ID,
+    origin: attackPose.origin,
+    forward: attackPose.forward,
+  })
+
+  if (applyBonkResult(bonkResult)) {
     hasHitThisSwing = true
   }
 }

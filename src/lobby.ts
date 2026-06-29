@@ -16,6 +16,10 @@ import { cleanupGame, resetGameState } from './gameReset'
 import { uiState } from './uiManager'
 import { hideHud } from './hud'
 import { enableFollowCamera, disableFollowCamera } from './cameraRig'
+import { leaveLocalRoom } from './localRoom'
+import { endLocalMatch } from './localMatch'
+import type { LocalMatchConfig } from './localMatch'
+import { resetLocalMatchRuntimeState } from './localMatchState'
 
 // Lobby position
 const LOBBY_X = 48
@@ -97,14 +101,14 @@ export function createLobby(): void {
       entity: startButtonEntity,
       opts: {
         button: InputAction.IA_POINTER,
-        hoverText: 'START GAME',
+        hoverText: 'Play Game',
         maxDistance: 10
       }
     },
     (event) => {
       console.log('[Lobby] ✅ BUTTON CLICKED!', event)
-      uiState.showModeSelection = true
-      console.log('[Lobby] showModeSelection set to:', uiState.showModeSelection)
+      uiState.showRoomEntry = true
+      console.log('[Lobby] showRoomEntry set to:', uiState.showRoomEntry)
     }
   )
   
@@ -117,7 +121,7 @@ export function createLobby(): void {
     position: Vector3.create(0, 4.2, 0),
   })
   TextShape.create(lobbyLabelEntity, {
-    text: 'DOGE HUNT\nClick to Start',
+    text: 'DOGE HUNT\nClick to Play Game',
     fontSize: 5,
     textColor: Color4.create(1, 0.84, 0, 1),
     outlineColor: Color4.create(0, 0, 0, 1),
@@ -144,12 +148,12 @@ export function createLobby(): void {
   })
 }
 
-/** Start single player game (called from UI) */
-export function startSinglePlayer(): void {
-  console.log('[Lobby] Starting single player game...')
+/** Start local match from the waiting room. */
+export function startLocalMatchFromLobby(matchConfig: LocalMatchConfig): void {
+  console.log('[Lobby] Starting local match...', matchConfig)
 
   // Build gameplay space first, then flip into PLAYING so systems don't see a half-initialized round.
-  startGame()
+  startGame(matchConfig)
   setState(GameState.PLAYING)
   setLobbyVisible(false)
   movePlayerTo({
@@ -182,8 +186,12 @@ export function returnToLobby(): void {
   // Reset state
   console.log('[Lobby] Step 4: Resetting UI state...')
   setState(GameState.LOBBY)
-  uiState.showModeSelection = false
+  uiState.showRoomEntry = false
+  uiState.showWaitingRoom = false
   uiState.showGameOver = false
+  leaveLocalRoom()
+  endLocalMatch()
+  resetLocalMatchRuntimeState()
   hideHud()
   
   console.log('[Lobby] ========== RETURN TO LOBBY COMPLETE ==========')

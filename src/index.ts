@@ -3,7 +3,7 @@
  *
  * Scene: Neon-noir arena (3x3 parcels, 48m x 48m)
  * Features:
- *   - Lobby system with mode selection
+ *   - Lobby system with local room entry
  *   - Dark arena with neon-lit walls, pillars, corridors
  *   - 12 NPC Doges patrolling with "?" labels
  *   - Player disguised as Doge
@@ -15,7 +15,7 @@
 import { engine } from '@dcl/sdk/ecs'
 
 import { GameState, isPlaying } from './gameState'
-import { createLobby, startSinglePlayer, returnToLobby } from './lobby'
+import { createLobby, startLocalMatchFromLobby, returnToLobby } from './lobby'
 import { buildArena } from './arena'
 import { spawnAllNpcs, npcPatrolSystem, aliveCount, resetNpcCounters, NPC_TOTAL } from './npc'
 import { combatSystem, totalBonks, resetCombat } from './combat'
@@ -36,12 +36,34 @@ import { setupSkills, skillSystem } from './skills'
 import { setupHud } from './hud'
 import { showGameOverUI } from './gameOverUI'
 import { setupUI, setCallbacks } from './uiManager'
+import { requestRoundEnd } from './gameResolvers'
+import { getFallbackLocalMatchConfig } from './localMatch'
+import type { LocalMatchConfig } from './localMatch'
+import {
+  getLocalPresentationMatchState,
+  initializeLocalMatchRuntimeState,
+} from './localMatchState'
 
-const NPC_COUNT = 12
-
+let activeMatchConfig: LocalMatchConfig = getFallbackLocalMatchConfig()
 let gameInitialized = false
 let skillsInitialized = false
 let gameOverTriggered = false
+
+function readLocalMatchStats() {
+  return getLocalPresentationMatchState({
+    bonks: totalBonks,
+    alive: aliveCount,
+    total: activeMatchConfig.decoyNpcCount,
+    timeLeft: roundTimeLeft,
+    roundOver,
+  }).stats
+}
+
+function formatElapsedTime(seconds: number): string {
+  const m = Math.floor(seconds / 60)
+  const s = Math.floor(seconds % 60)
+  return `${m}:${s < 10 ? '0' : ''}${s}`
+}
 
 /** Reset game over flag (called from gameReset) */
 export function resetGameOverFlag(): void {
@@ -52,13 +74,20 @@ export function resetGameOverFlag(): void {
 }
 
 /** Start the game (called from lobby) */
-export function startGame() {
+export function startGame(matchConfig: LocalMatchConfig = getFallbackLocalMatchConfig()) {
   if (gameInitialized) {
     console.log('[Game] Already initialized, skipping...')
     return
   }
 
-  console.log('[Game] Starting game...')
+  activeMatchConfig = matchConfig
+  const runtimeState = initializeLocalMatchRuntimeState(activeMatchConfig)
+  const presentationState = getLocalPresentationMatchState()
+  console.log('[Game] Starting game...', activeMatchConfig)
+  console.log('[Game] Local match state initialized:', {
+    publicDoges: runtimeState.publicDoges.length,
+    privatePlayer: runtimeState.privatePlayer.playerId,
+  })
 
   // Ensure stale values from a previous round don't trip game-over on start.
   resetNpcCounters()
@@ -70,7 +99,7 @@ export function startGame() {
   buildArena()
 
   // 2. Spawn NPC Doges
-  spawnAllNpcs(NPC_COUNT)
+  spawnAllNpcs(activeMatchConfig.decoyNpcCount, presentationState.decoyPublicDogeIds)
 
   // 3. Disguise the player as a Doge
   setupPlayerDisguise()
@@ -89,27 +118,25 @@ export function main() {
   
   // 2. Set UI callbacks
   setCallbacks({
-    onStartSinglePlayer: startSinglePlayer,
+    onStartLocalMatch: startLocalMatchFromLobby,
     onReturnToLobby: returnToLobby,
     getGameStats: () => {
-      const survivalTime = 180 - roundTimeLeft
-      const m = Math.floor(survivalTime / 60)
-      const s = Math.floor(survivalTime % 60)
-      const timeStr = `${m}:${s < 10 ? '0' : ''}${s}`
+      const stats = readLocalMatchStats()
       return {
-        bonks: totalBonks,
-        alive: aliveCount,
-        total: NPC_COUNT,
-        time: timeStr,
+        bonks: stats.bonks,
+        alive: stats.alive,
+        total: stats.total,
+        time: formatElapsedTime(stats.elapsedSeconds),
       }
     },
     getHudData: () => {
+      const stats = readLocalMatchStats()
       return {
-        bonks: totalBonks,
-        alive: aliveCount,
-        total: NPC_COUNT,
-        timeLeft: roundTimeLeft,
-        roundOver: roundOver,
+        bonks: stats.bonks,
+        alive: stats.alive,
+        total: stats.total,
+        timeLeft: stats.timeLeft,
+        roundOver: stats.roundOver,
       }
     },
   })
@@ -156,8 +183,17 @@ export function main() {
     
     if (shouldEnd && !gameOverTriggered) {
       gameOverTriggered = true
+      const stats = readLocalMatchStats()
+      requestRoundEnd({
+        reason: roundOver ? 'time-up' : 'all-doges-eliminated',
+        bonks: stats.bonks,
+        aliveDoges: stats.alive,
+        totalDoges: stats.total,
+        timeLeftSeconds: stats.timeLeft,
+        elapsedSeconds: stats.elapsedSeconds,
+      })
       console.log('[Game] Game over! Reason:', roundOver ? 'Time up' : 'All NPCs eliminated')
-      console.log('[Game] Stats - Bonks:', totalBonks, 'Alive:', aliveCount, 'Time left:', roundTimeLeft)
+      console.log('[Game] Stats - Bonks:', stats.bonks, 'Alive:', stats.alive, 'Time left:', stats.timeLeft)
       showGameOverUI()
     }
   })
