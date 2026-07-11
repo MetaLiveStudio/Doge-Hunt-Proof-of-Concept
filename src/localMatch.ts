@@ -1,4 +1,5 @@
 import type { LocalRoomSnapshot } from './localRoom'
+import { getMatchSpawnPoint, type PlayerSpawnPoint } from './shared/playerSpawns'
 
 export type LocalMatchPhase = 'idle' | 'active'
 
@@ -8,6 +9,7 @@ export type LocalMatchPlayerSlot = {
   isLocal: boolean
   isHost: boolean
   isSimulated: boolean
+  address?: string
 }
 
 export type LocalMatchConfig = {
@@ -17,6 +19,7 @@ export type LocalMatchConfig = {
   playerCount: number
   decoyNpcCount: number
   playerSlots: LocalMatchPlayerSlot[]
+  localSpawnPoint?: PlayerSpawnPoint
 }
 
 const DEFAULT_TOTAL_DOGES = 12
@@ -31,13 +34,15 @@ export function startLocalMatch(room: LocalRoomSnapshot): LocalMatchConfig {
   const totalDoges = DEFAULT_TOTAL_DOGES
   const decoyNpcCount = Math.max(0, totalDoges - playerCount)
 
+  const matchId = `local-match-${nextMatchId++}`
   currentMatch = {
-    matchId: `local-match-${nextMatchId++}`,
+    matchId,
     phase: 'active',
     totalDoges,
     playerCount,
     decoyNpcCount,
     playerSlots,
+    localSpawnPoint: getMatchSpawnPoint(0, matchId),
   }
 
   return currentMatch
@@ -58,6 +63,7 @@ export function getFallbackLocalMatchConfig(): LocalMatchConfig {
     totalDoges: DEFAULT_TOTAL_DOGES,
     playerCount: 1,
     decoyNpcCount: DEFAULT_TOTAL_DOGES - 1,
+    localSpawnPoint: getMatchSpawnPoint(0, 'local-match-fallback'),
     playerSlots: [
       {
         playerId: LOCAL_PLAYER_ID,

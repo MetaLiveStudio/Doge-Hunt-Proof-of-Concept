@@ -2,38 +2,6 @@
   "version": 1,
   "components": [
     {
-      "name": "composite::root",
-      "jsonSchema": {
-        "type": "object",
-        "properties": {
-          "src": {
-            "type": "string",
-            "serializationType": "utf8-string"
-          },
-          "entities": {
-            "type": "array",
-            "items": {
-              "type": "object",
-              "properties": {
-                "src": {
-                  "type": "integer",
-                  "serializationType": "entity"
-                },
-                "dest": {
-                  "type": "integer",
-                  "serializationType": "entity"
-                }
-              },
-              "serializationType": "map"
-            },
-            "serializationType": "array"
-          }
-        },
-        "serializationType": "map"
-      },
-      "data": {}
-    },
-    {
       "name": "core-schema::Tags",
       "jsonSchema": {
         "type": "object",
@@ -180,7 +148,7 @@
                 "T",
                 "A"
               ],
-              "default": "T",
+              "default": "A",
               "serializationType": "enum-string",
               "enumObject": {
                 "Teen": "T",
@@ -653,8 +621,8 @@
                   "x": {
                     "$case": "range",
                     "value": [
-                      32.29999923706055,
-                      34.29999923706055
+                      47,
+                      49
                     ]
                   },
                   "y": {
@@ -667,15 +635,15 @@
                   "z": {
                     "$case": "range",
                     "value": [
-                      27.010000228881836,
-                      29.010000228881836
+                      54,
+                      56
                     ]
                   }
                 },
                 "cameraTarget": {
-                  "x": 8,
-                  "y": 1.600000023841858,
-                  "z": 8
+                  "x": 48,
+                  "y": 2.200000047683716,
+                  "z": 48
                 }
               }
             ],
@@ -963,6 +931,10 @@
               {
                 "type": "delete",
                 "jsonSchema": "{\"type\":\"object\",\"properties\":{},\"serializationType\":\"map\"}"
+              },
+              {
+                "type": "spawn_entity",
+                "jsonSchema": "{\"type\":\"object\",\"properties\":{\"src\":{\"type\":\"string\",\"serializationType\":\"utf8-string\"},\"position\":{\"type\":\"object\",\"properties\":{\"x\":{\"type\":\"number\"},\"y\":{\"type\":\"number\"},\"z\":{\"type\":\"number\"},\"w\":{\"type\":\"number\"}},\"serializationType\":\"vector3\"}},\"serializationType\":\"map\"}"
               }
             ]
           }

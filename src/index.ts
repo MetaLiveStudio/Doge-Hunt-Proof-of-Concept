@@ -5,7 +5,7 @@
  * Features:
  *   - Lobby system with local room entry
  *   - Dark arena with neon-lit walls, pillars, corridors
- *   - 12 NPC Doges patrolling with "?" labels
+ *   - Small Doge field for focused multiplayer testing
  *   - Player disguised as Doge
  *   - Click-to-bonk: knockback + permanent knockout
  *   - Meme-style kill feed
@@ -13,6 +13,7 @@
  *   - Rock Solid skill: press E near pillar to hide
  */
 import { engine } from '@dcl/sdk/ecs'
+import { isServer } from '@dcl/sdk/network'
 
 import { GameState, isPlaying } from './gameState'
 import { createLobby, startLocalMatchFromLobby, returnToLobby } from './lobby'
@@ -31,7 +32,7 @@ import {
   roundTimeLeft,
   roundOver,
 } from './ui'
-import { setupPlayerDisguise, dogeBodyEntity } from './player'
+import { setupPlayerDisguise, dogeBodyEntity, setPlayerSpectatorVisualHidden } from './player'
 import { setupSkills, skillSystem } from './skills'
 import { setupHud } from './hud'
 import { showGameOverUI } from './gameOverUI'
@@ -42,21 +43,42 @@ import type { LocalMatchConfig } from './localMatch'
 import {
   getLocalPresentationMatchState,
   initializeLocalMatchRuntimeState,
+  type LocalMatchRuntimeSeed,
 } from './localMatchState'
+import { setupO4ClientDiagnostics, setupO4ServerDiagnostics } from './authDiagnostics'
+import { setupServerLobby } from './server/serverLobby'
+import { setServerMatchStartHandler, setupServerRoomClient } from './client/serverRoomClient'
+import {
+  canLocalServerPlayerAct,
+  getLocalServerPlayerStatus,
+  getLocalServerPlayerStatusLabel,
+  getServerResultsRevealLines,
+  getServerResultsRevealData,
+  getServerPublicHudLabel,
+  getServerResultOutcome,
+  mergeServerPublicStats,
+  setupServerPublicStateClient,
+} from './client/serverPublicStateClient'
+import { setupServerGameplayClient } from './client/serverGameplayClient'
+import { syncRemotePlayerProxies } from './client/remotePlayerProxies'
 
 let activeMatchConfig: LocalMatchConfig = getFallbackLocalMatchConfig()
 let gameInitialized = false
 let skillsInitialized = false
 let gameOverTriggered = false
+let pendingGameOverDelay = 0
+const ROUND_END_VISUAL_DELAY_SECONDS = 0.35
 
 function readLocalMatchStats() {
-  return getLocalPresentationMatchState({
+  const localStats = getLocalPresentationMatchState({
     bonks: totalBonks,
     alive: aliveCount,
     total: activeMatchConfig.decoyNpcCount,
     timeLeft: roundTimeLeft,
     roundOver,
   }).stats
+
+  return mergeServerPublicStats(activeMatchConfig.matchId, localStats)
 }
 
 function formatElapsedTime(seconds: number): string {
@@ -70,18 +92,22 @@ export function resetGameOverFlag(): void {
   gameOverTriggered = false
   gameInitialized = false
   skillsInitialized = false
+  pendingGameOverDelay = 0
   console.log('[Game] Game flags reset (gameOver, gameInitialized, skillsInitialized)')
 }
 
 /** Start the game (called from lobby) */
-export function startGame(matchConfig: LocalMatchConfig = getFallbackLocalMatchConfig()) {
+export function startGame(
+  matchConfig: LocalMatchConfig = getFallbackLocalMatchConfig(),
+  runtimeSeed?: LocalMatchRuntimeSeed
+) {
   if (gameInitialized) {
     console.log('[Game] Already initialized, skipping...')
     return
   }
 
   activeMatchConfig = matchConfig
-  const runtimeState = initializeLocalMatchRuntimeState(activeMatchConfig)
+  const runtimeState = initializeLocalMatchRuntimeState(activeMatchConfig, runtimeSeed)
   const presentationState = getLocalPresentationMatchState()
   console.log('[Game] Starting game...', activeMatchConfig)
   console.log('[Game] Local match state initialized:', {
@@ -111,6 +137,19 @@ export function startGame(matchConfig: LocalMatchConfig = getFallbackLocalMatchC
 }
 
 export function main() {
+  if (isServer()) {
+    console.log('[Server] Doge Hunt authoritative server entry loaded.')
+    setupO4ServerDiagnostics()
+    setupServerLobby()
+    return
+  }
+
+  console.log('[Client] Doge Hunt client entry loaded.')
+  setupO4ClientDiagnostics()
+  setupServerRoomClient()
+  setupServerPublicStateClient()
+  setupServerGameplayClient()
+  setServerMatchStartHandler(startLocalMatchFromLobby)
   console.log('Doge Hunt Proof of Concept loaded. Trust No Doge.')
 
   // 1. Setup unified UI renderer
@@ -122,11 +161,18 @@ export function main() {
     onReturnToLobby: returnToLobby,
     getGameStats: () => {
       const stats = readLocalMatchStats()
+      const outcome = getServerResultOutcome(activeMatchConfig.matchId, stats.alive)
       return {
         bonks: stats.bonks,
         alive: stats.alive,
         total: stats.total,
         time: formatElapsedTime(stats.elapsedSeconds),
+        identityRevealLines: getServerResultsRevealLines(activeMatchConfig.matchId),
+        revealData: getServerResultsRevealData(activeMatchConfig.matchId),
+        localStatusLabel: getLocalServerPlayerStatusLabel(),
+        isWin: outcome?.isWin,
+        resultTitle: outcome?.title,
+        resultSubtitle: outcome?.subtitle,
       }
     },
     getHudData: () => {
@@ -137,6 +183,10 @@ export function main() {
         total: stats.total,
         timeLeft: stats.timeLeft,
         roundOver: stats.roundOver,
+        serverPublicLabel: getServerPublicHudLabel(activeMatchConfig.matchId),
+        localPlayerStatus: getLocalServerPlayerStatus(),
+        localStatusLabel: getLocalServerPlayerStatusLabel(),
+        canAct: canLocalServerPlayerAct(),
       }
     },
   })
@@ -153,6 +203,16 @@ export function main() {
   engine.addSystem((dt: number) => {
     if (!isPlaying()) return
     combatSystem(dt)
+  })
+
+  engine.addSystem(() => {
+    if (!isPlaying()) return
+    setPlayerSpectatorVisualHidden(!canLocalServerPlayerAct())
+  })
+
+  engine.addSystem((dt: number) => {
+    if (!isPlaying()) return
+    syncRemotePlayerProxies(dt)
   })
 
   engine.addSystem((dt: number) => {
@@ -173,26 +233,40 @@ export function main() {
   })
 
   // 6. Game over detection
-  engine.addSystem(() => {
+  engine.addSystem((dt: number) => {
     if (!isPlaying()) return
     if (!gameInitialized) return
     if (NPC_TOTAL <= 0) return
     
-    // Check if game should end
-    const shouldEnd = roundOver || aliveCount <= 0
+    const stats = readLocalMatchStats()
+    const isServerMatch = activeMatchConfig.matchId.startsWith('server-match-')
+    const shouldEnd = stats.roundOver || (!isServerMatch && stats.alive <= 0)
+
+    if (!shouldEnd) {
+      pendingGameOverDelay = 0
+      return
+    }
     
     if (shouldEnd && !gameOverTriggered) {
+      if (pendingGameOverDelay <= 0) {
+        pendingGameOverDelay = ROUND_END_VISUAL_DELAY_SECONDS
+        console.log(`[Game] Round end detected; waiting ${ROUND_END_VISUAL_DELAY_SECONDS}s for elimination visuals.`)
+      }
+
+      pendingGameOverDelay = Math.max(0, pendingGameOverDelay - dt)
+      if (pendingGameOverDelay > 0) return
+
       gameOverTriggered = true
-      const stats = readLocalMatchStats()
+      const endReason = stats.roundEndReason ?? (stats.alive <= 0 ? 'all-doges-eliminated' : 'time-up')
       requestRoundEnd({
-        reason: roundOver ? 'time-up' : 'all-doges-eliminated',
+        reason: endReason,
         bonks: stats.bonks,
         aliveDoges: stats.alive,
         totalDoges: stats.total,
         timeLeftSeconds: stats.timeLeft,
         elapsedSeconds: stats.elapsedSeconds,
       })
-      console.log('[Game] Game over! Reason:', roundOver ? 'Time up' : 'All NPCs eliminated')
+      console.log('[Game] Game over! Reason:', endReason)
       console.log('[Game] Stats - Bonks:', stats.bonks, 'Alive:', stats.alive, 'Time left:', stats.timeLeft)
       showGameOverUI()
     }

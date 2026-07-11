@@ -20,6 +20,21 @@ We are developing **Doge Hunt**, a Decentraland-based mobile game. Our goal is t
    - Prefer first implementing multiplayer-shaped concepts locally, such as room state, player count, ready/start UI, and match lifecycle, using the existing single-player runtime.
    - After each phase, verify with build/type checks. Do not depend on preview to discover basic compile or integration failures.
 
+4. **Authoritative server migration requires extra logging**
+   - Treat authoritative server work as high-risk because failures may come from SDK package compatibility, Hammurabi/auth-server runtime behavior, or Creator Hub preview integration.
+   - Split authoritative server work into small checkpoints. Do not combine dependency changes, `scene.json` changes, `isServer()` branching, message registration, and gameplay migration in one phase.
+   - Before each authoritative server checkpoint, record the intended scope and rollback boundary in `tasks.md`.
+   - After each checkpoint, record exact files changed, commands run, tool/package versions when relevant, warnings/errors, and whether the result was build-only or preview-tested.
+   - Use clear log prefixes such as `[Client]`, `[Server]`, `[AuthServer]`, and `[Resolver]` for any new logs related to server migration.
+   - On Windows dependency checkpoints, do not rely on bare `npm` or `npx` if they resolve through user-prefix shims. Prefer an explicit Node/npm CLI path and a known writable temporary npm cache, and record both paths in `tasks.md`.
+   - Preview or Creator Hub smoke tests require explicit user authorization and must be logged separately from code/build checks.
+   - If an authoritative server checkpoint fails, stop and document the failing command, the first relevant error, suspected layer (package, scene config, server runtime, Creator Hub, or gameplay code), and the smallest rollback path before continuing.
+   - Do not run a no-client probe from the same project path while a Creator Hub/Explorer preview for that path is active. Even with a different HTTP port, Hammurabi/LiveKit can derive the same preview room identity from the scene path and kick the authoritative server with `DUPLICATE_IDENTITY`.
+   - Do not leave multiple preview servers running from the same project path, even if they listen on different HTTP ports. Before judging server-message behavior, confirm there is only one active same-path preview server; stop stale CLI preview processes while preserving the user's active Creator Hub preview.
+   - If Creator Hub preview is active and backend verification is needed, either use the live Creator Hub preview only, or copy the project to a scratch path before running a no-client probe so it gets a distinct LiveKit preview room.
+   - If `DUPLICATE_IDENTITY` appears, restart the active preview server and Explorer before judging gameplay/message code. A stuck client state after this error may only mean the server comms transport was kicked before messages could arrive.
+   - The original `Doge Hunt Proof of Concept` path is considered contaminated for auth-server Creator Hub preview work. Continue authoritative-server migration from `Doge Hunt Auth Clean` unless the user explicitly decides otherwise.
+
 ## Technical Specifications
 
 1. **SDK and UI**

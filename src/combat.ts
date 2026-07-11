@@ -12,18 +12,23 @@ import {
   NpcPatrol,
   aliveCount,
   applyNpcPublicDogePresentation,
+  getNpcEntityByPublicDogeId,
   getNpcPublicDogeId,
   startNpcElimination,
 } from './npc'
 import { addKillFeedMessage } from './ui'
 import { recordLocalBonkHit } from './localMatchState'
-import { requestBonk, setGameplayResolvers } from './gameResolvers'
+import { notifyBonkActionStart, requestBonk, setGameplayResolvers } from './gameResolvers'
 import type { BonkRequest, BonkResult } from './gameResolvers'
 import {
   playPlayerAttackAnimation,
   PLAYER_ATTACK_IMPACT_TIME,
   PLAYER_ATTACK_TOTAL_DURATION,
 } from './player'
+import {
+  canLocalServerPlayerAct,
+  getLocalServerPlayerStatus,
+} from './client/serverPublicStateClient'
 
 const KILL_MESSAGES = [
   'Such eliminate. Very dead. Wow.',
@@ -40,10 +45,10 @@ const KILL_MESSAGES = [
 
 export let totalBonks = 0
 
-const ATTACK_MIN_FORWARD = 0.25
-const ATTACK_RANGE = 2.9
-const ATTACK_RADIUS = 1.92
-const ATTACK_HIT_WINDOW_SECONDS = 0.12
+const ATTACK_MIN_FORWARD = 0.15
+const ATTACK_RANGE = 3.6
+const ATTACK_RADIUS = 2.45
+const ATTACK_HIT_WINDOW_SECONDS = 0.16
 const COMBAT_START_INPUT_GRACE_SECONDS = 0.2
 
 let attackElapsed = PLAYER_ATTACK_TOTAL_DURATION
@@ -62,9 +67,23 @@ export function resetCombat(): void {
 
 export function triggerPlayerBonkAttack(): boolean {
   if (startInputGraceTimer > 0) return false
+  if (!canLocalServerPlayerAct()) {
+    console.log(`[Client][T] bonk input blocked localStatus=${getLocalServerPlayerStatus()}`)
+    return false
+  }
 
   attackElapsed = 0
   hasHitThisSwing = false
+
+  const attackPose = tryGetAttackPose()
+  if (attackPose) {
+    notifyBonkActionStart({
+      attackerPlayerId: LOCAL_PLAYER_ID,
+      origin: attackPose.origin,
+      forward: attackPose.forward,
+    })
+  }
+
   playPlayerAttackAnimation()
   return true
 }
@@ -113,7 +132,7 @@ function tryGetAttackPose(): { origin: Vector3; forward: Vector3 } | null {
 }
 
 function resolveLocalBonk(request: BonkRequest): BonkResult {
-  const targetNpc = findBestNpcInFront(request.origin, request.forward)
+  const targetNpc = request.candidateTargetNpc ?? findBestNpcInFront(request.origin, request.forward)
 
   if (!targetNpc) {
     return {
@@ -132,11 +151,23 @@ function resolveLocalBonk(request: BonkRequest): BonkResult {
 setGameplayResolvers({ resolveBonk: resolveLocalBonk })
 
 function applyBonkResult(result: BonkResult): boolean {
+  if (result.outcome === 'pending') return true
   if (result.outcome === 'miss') return false
 
   const publicDogeId = getNpcPublicDogeId(result.targetNpc)
   recordLocalBonkHit(publicDogeId)
   return applyNpcBonkPresentation(result.targetNpc, result.request.origin, publicDogeId)
+}
+
+export function applyServerBonkAccepted(publicDogeId: string, hitOrigin: Vector3): boolean {
+  const targetNpc = getNpcEntityByPublicDogeId(publicDogeId)
+  if (!targetNpc) {
+    console.log(`[Client][S] bonkResult accepted but local NPC is missing publicDogeId=${publicDogeId}`)
+    return false
+  }
+
+  recordLocalBonkHit(publicDogeId)
+  return applyNpcBonkPresentation(targetNpc, hitOrigin, publicDogeId)
 }
 
 function findBestNpcInFront(origin: Vector3, forward: Vector3): Entity | null {
@@ -190,10 +221,17 @@ export function combatSystem(dt: number): void {
   const attackPose = tryGetAttackPose()
   if (!attackPose) return
 
+  const candidateTargetNpc = findBestNpcInFront(attackPose.origin, attackPose.forward)
+  const candidatePublicDogeId = candidateTargetNpc
+    ? getNpcPublicDogeId(candidateTargetNpc) ?? ''
+    : ''
+
   const bonkResult = requestBonk({
     attackerPlayerId: LOCAL_PLAYER_ID,
     origin: attackPose.origin,
     forward: attackPose.forward,
+    candidatePublicDogeId,
+    candidateTargetNpc: candidateTargetNpc ?? undefined,
   })
 
   if (applyBonkResult(bonkResult)) {

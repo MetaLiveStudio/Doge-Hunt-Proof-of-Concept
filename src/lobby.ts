@@ -19,7 +19,13 @@ import { enableFollowCamera, disableFollowCamera } from './cameraRig'
 import { leaveLocalRoom } from './localRoom'
 import { endLocalMatch } from './localMatch'
 import type { LocalMatchConfig } from './localMatch'
-import { resetLocalMatchRuntimeState } from './localMatchState'
+import { resetLocalMatchRuntimeState, type LocalMatchRuntimeSeed } from './localMatchState'
+import {
+  getLobbyRoomPrompt,
+  requestServerRoomLeave,
+  requestServerRoomSnapshot,
+} from './client/serverRoomClient'
+import { resetServerPublicMatchSnapshot } from './client/serverPublicStateClient'
 
 // Lobby position
 const LOBBY_X = 48
@@ -35,6 +41,7 @@ let lobbyRoot: Entity | null = null
 let lobbyModelEntity: Entity | null = null
 let startButtonEntity: Entity | null = null
 let lobbyLabelEntity: Entity | null = null
+let lastLobbyLabelText = ''
 
 function setLobbyVisible(visible: boolean): void {
   if (lobbyRoot) {
@@ -108,6 +115,7 @@ export function createLobby(): void {
     (event) => {
       console.log('[Lobby] ✅ BUTTON CLICKED!', event)
       uiState.showRoomEntry = true
+      requestServerRoomSnapshot()
       console.log('[Lobby] showRoomEntry set to:', uiState.showRoomEntry)
     }
   )
@@ -121,7 +129,7 @@ export function createLobby(): void {
     position: Vector3.create(0, 4.2, 0),
   })
   TextShape.create(lobbyLabelEntity, {
-    text: 'DOGE HUNT\nClick to Play Game',
+    text: getLobbyLabelText(),
     fontSize: 5,
     textColor: Color4.create(1, 0.84, 0, 1),
     outlineColor: Color4.create(0, 0, 0, 1),
@@ -130,6 +138,7 @@ export function createLobby(): void {
   Billboard.create(lobbyLabelEntity, { billboardMode: BillboardMode.BM_Y })
   VisibilityComponent.create(lobbyLabelEntity, { visible: true })
   VisibilityComponent.create(startButtonEntity, { visible: true })
+  requestServerRoomSnapshot()
 
   // Rotating animation system
   engine.addSystem((dt: number) => {
@@ -145,19 +154,28 @@ export function createLobby(): void {
         w: Math.cos(newAngle / 2),
       }
     }
+
+    updateLobbyLabelText()
   })
 }
 
 /** Start local match from the waiting room. */
-export function startLocalMatchFromLobby(matchConfig: LocalMatchConfig): void {
+export function startLocalMatchFromLobby(
+  matchConfig: LocalMatchConfig,
+  runtimeSeed?: LocalMatchRuntimeSeed
+): void {
   console.log('[Lobby] Starting local match...', matchConfig)
 
   // Build gameplay space first, then flip into PLAYING so systems don't see a half-initialized round.
-  startGame(matchConfig)
+  uiState.showRoomEntry = false
+  uiState.showWaitingRoom = false
+  startGame(matchConfig, runtimeSeed)
   setState(GameState.PLAYING)
   setLobbyVisible(false)
+  const spawnPoint = matchConfig.localSpawnPoint
   movePlayerTo({
-    newRelativePosition: { x: 48, y: PLAYER_SPAWN_Y, z: 48 },
+    newRelativePosition: spawnPoint?.position ?? { x: 48, y: PLAYER_SPAWN_Y, z: 48 },
+    cameraTarget: spawnPoint?.cameraTarget,
   })
   enableFollowCamera()
 }
@@ -189,10 +207,32 @@ export function returnToLobby(): void {
   uiState.showRoomEntry = false
   uiState.showWaitingRoom = false
   uiState.showGameOver = false
+  requestServerRoomLeave('return-to-lobby')
   leaveLocalRoom()
   endLocalMatch()
   resetLocalMatchRuntimeState()
+  resetServerPublicMatchSnapshot()
   hideHud()
   
   console.log('[Lobby] ========== RETURN TO LOBBY COMPLETE ==========')
+}
+
+function updateLobbyLabelText(): void {
+  if (!lobbyLabelEntity || !TextShape.has(lobbyLabelEntity)) return
+
+  const nextText = getLobbyLabelText()
+  if (nextText === lastLobbyLabelText) return
+
+  const textShape = TextShape.getMutable(lobbyLabelEntity)
+  textShape.text = nextText
+  lastLobbyLabelText = nextText
+}
+
+function getLobbyLabelText(): string {
+  const prompt = getLobbyRoomPrompt()
+  if (!prompt.actionLabel) {
+    return `DOGE HUNT\n${prompt.statusLabel}`
+  }
+
+  return `DOGE HUNT\n${prompt.actionLabel}\n${prompt.statusLabel}`
 }

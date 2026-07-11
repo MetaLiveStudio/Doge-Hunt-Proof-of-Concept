@@ -32,7 +32,7 @@ export type PrivatePlayerState = {
   }
 }
 
-export type LocalRoundEndReason = 'all-doges-eliminated' | 'time-up'
+export type LocalRoundEndReason = 'all-doges-eliminated' | 'time-up' | 'final-survivor'
 
 export type LocalRoundState = {
   phase: 'active' | 'ended'
@@ -55,6 +55,14 @@ export type LocalMatchRuntimeState = {
   privatePlayers: PrivatePlayerState[]
   privatePlayer: PrivatePlayerState
   round: LocalRoundState
+}
+
+export type LocalMatchRuntimeSeed = {
+  source: 'server'
+  localPlayerId: string
+  publicDoges: PublicDogeState[]
+  privatePlayers: PrivatePlayerState[]
+  privateDogeIdentities: PrivateDogeIdentityState[]
 }
 
 export type LocalMatchStatsFallback = {
@@ -106,7 +114,14 @@ const ROUND_DURATION_SECONDS = 180
 let runtimeState: LocalMatchRuntimeState | null = null
 let privateDogeIdentities: PrivateDogeIdentityState[] = []
 
-export function initializeLocalMatchRuntimeState(matchConfig: LocalMatchConfig): LocalMatchRuntimeState {
+export function initializeLocalMatchRuntimeState(
+  matchConfig: LocalMatchConfig,
+  runtimeSeed?: LocalMatchRuntimeSeed
+): LocalMatchRuntimeState {
+  if (runtimeSeed) {
+    return initializeRuntimeStateFromSeed(matchConfig, runtimeSeed)
+  }
+
   const playerSlots = getRuntimePlayerSlots(matchConfig)
   const publicDoges = createPublicDogeStates(matchConfig)
   const localPlayerDogeId = publicDoges[0]?.publicDogeId ?? `${matchConfig.matchId}-doge-1`
@@ -146,6 +161,45 @@ export function initializeLocalMatchRuntimeState(matchConfig: LocalMatchConfig):
     privatePlayer: localPrivatePlayer,
     round: createActiveRoundState(matchConfig.decoyNpcCount),
   }
+
+  return runtimeState
+}
+
+function initializeRuntimeStateFromSeed(
+  matchConfig: LocalMatchConfig,
+  runtimeSeed: LocalMatchRuntimeSeed
+): LocalMatchRuntimeState {
+  const playerSlots = getRuntimePlayerSlots(matchConfig)
+  const publicDoges = runtimeSeed.publicDoges.map((doge) => ({ ...doge }))
+  const privatePlayers = runtimeSeed.privatePlayers.map((player) => ({
+    ...player,
+    turnToRock: { ...player.turnToRock },
+  }))
+  const localPrivatePlayer = privatePlayers.find((player) => player.playerId === runtimeSeed.localPlayerId)
+    ?? privatePlayers[0]
+    ?? createPrivatePlayerState(playerSlots[0], publicDoges[0]?.publicDogeId ?? `${matchConfig.matchId}-doge-1`)
+
+  privateDogeIdentities = runtimeSeed.privateDogeIdentities.map((identity) => ({ ...identity }))
+
+  runtimeState = {
+    matchId: matchConfig.matchId,
+    totalDoges: matchConfig.totalDoges,
+    playerCount: matchConfig.playerCount,
+    decoyNpcCount: matchConfig.decoyNpcCount,
+    playerSlots,
+    publicDoges,
+    privatePlayers: privatePlayers.length > 0 ? privatePlayers : [localPrivatePlayer],
+    privatePlayer: localPrivatePlayer,
+    round: createActiveRoundState(matchConfig.decoyNpcCount),
+  }
+
+  console.log('[Match][Q] Runtime state initialized from server seed:', {
+    matchId: runtimeState.matchId,
+    publicDoges: runtimeState.publicDoges.length,
+    privatePlayers: runtimeState.privatePlayers.length,
+    privateIdentities: privateDogeIdentities.length,
+    localPlayer: runtimeState.privatePlayer.playerId,
+  })
 
   return runtimeState
 }
@@ -310,7 +364,7 @@ export function recordLocalRoundEnded(input: {
     finalBonks: Math.max(0, input.bonks),
     finalAliveDoges: Math.max(0, input.aliveDoges),
     totalDoges: Math.max(0, input.totalDoges),
-    winnerPlayerId: input.reason === 'all-doges-eliminated'
+    winnerPlayerId: input.reason === 'all-doges-eliminated' || input.reason === 'final-survivor'
       ? runtimeState.privatePlayer.playerId
       : undefined,
   }

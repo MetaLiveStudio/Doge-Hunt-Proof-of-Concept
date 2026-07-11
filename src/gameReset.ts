@@ -9,6 +9,7 @@ import { cleanupWorldUi, resetRoundTimer } from './ui'
 import { resetGameOverFlag } from './index'
 import { cleanupPlayerDisguise } from './player'
 import { cleanupSkills } from './skills'
+import { cleanupRemotePlayerProxies } from './client/remotePlayerProxies'
 
 let spawnedNpcs: Entity[] = []
 let arenaEntities: Entity[] = []
@@ -64,6 +65,7 @@ export function cleanupGame(): void {
   cleanupWorldUi()
   cleanupSkills()
   cleanupPlayerDisguise()
+  cleanupRemotePlayerProxies()
 
   console.log('[Reset] Cleanup complete')
 }
