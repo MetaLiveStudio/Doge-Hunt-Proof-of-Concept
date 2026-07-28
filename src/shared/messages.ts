@@ -76,18 +76,18 @@ export const DogeMessages = {
   debugForceRoundEndResult: Schemas.Map({
     payloadJson: Schemas.String,
   }),
+  leaderboardPointsAwarded: Schemas.Map({
+    points: Schemas.Int,
+    mode: Schemas.String,
+    rank: Schemas.Int,
+    totalScore: Schemas.Int,
+    soloDailyRemaining: Schemas.Int,
+    multiDailyRemaining: Schemas.Int,
+  }),
 }
 
-function registerDogeRoom() {
-  return registerMessages(DogeMessages)
-}
+const dogeRoom = registerMessages(DogeMessages)
 
-let dogeRoom: ReturnType<typeof registerDogeRoom> | null = null
-
-export function getDogeRoom(): ReturnType<typeof registerDogeRoom> {
-  if (!dogeRoom) {
-    dogeRoom = registerDogeRoom()
-  }
-
+export function getDogeRoom(): typeof dogeRoom {
   return dogeRoom
 }

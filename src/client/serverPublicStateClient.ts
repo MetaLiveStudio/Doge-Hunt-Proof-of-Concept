@@ -7,6 +7,7 @@ import {
   type ServerPlayerStatus,
   type ServerPublicPlayerState,
 } from '../shared/serverPublicState'
+import { rankServerPlayers } from '../shared/leaderboardRanking'
 import type { LocalMatchStats } from '../localMatchState'
 
 export type ServerResultOutcome = {
@@ -133,32 +134,27 @@ export function getServerResultsRevealData(matchId: string): ServerResultsReveal
     ? `${winnerPlayer.displayName || 'Player'} as ${shortDogeId(winnerPlayer.publicDogeId)}`
     : 'No winner'
 
-  const revealPlayers = snapshot.players.map((player) => {
+  const revealPlayers = rankServerPlayers(snapshot.players, snapshot.winnerAddress).map((player) => {
+    const sourcePlayer = snapshot.players.find((entry) => normalizeAddress(entry.address) === normalizeAddress(player.address))
     const normalizedAddress = normalizeAddress(player.address)
-    const isWinner = Boolean(winnerAddress && normalizedAddress === winnerAddress)
     const isLocal = Boolean(localServerAddress && normalizedAddress === localServerAddress)
 
     return {
-      rank: 0,
-      displayName: isLocal ? 'You' : player.displayName || 'Player',
+      rank: player.rank,
+      displayName: isLocal ? 'You' : player.displayName,
       shortAddress: shortAddress(player.address),
-      dogeLabel: shortDogeId(player.publicDogeId),
-      statusLabel: isWinner
+      dogeLabel: shortDogeId(sourcePlayer?.publicDogeId ?? ''),
+      statusLabel: player.isWinner
         ? 'WINNER'
-        : player.status === 'active' && player.isAlive
+        : sourcePlayer?.status === 'active' && sourcePlayer?.isAlive
           ? 'SURVIVED'
           : 'ELIMINATED',
       bonks: player.bonks,
       isLocal,
-      isWinner,
-      eliminationOrder: player.eliminationOrder ?? 0,
+      isWinner: player.isWinner,
+      eliminationOrder: player.eliminationOrder,
     }
   })
-    .sort(compareResultRevealPlayers)
-    .map((player, index) => ({
-      ...player,
-      rank: index + 1,
-    }))
 
   return {
     endReasonLabel: snapshot.endReason ? formatEndReason(snapshot.endReason) : 'Round ended',
@@ -168,17 +164,6 @@ export function getServerResultsRevealData(matchId: string): ServerResultsReveal
     decoyAlive,
     decoyEliminated: Math.max(0, decoys.length - decoyAlive),
   }
-}
-
-function compareResultRevealPlayers(a: Omit<ServerResultRevealPlayer, 'rank'>, b: Omit<ServerResultRevealPlayer, 'rank'>): number {
-  if (a.isWinner !== b.isWinner) return a.isWinner ? -1 : 1
-
-  const aEliminated = a.eliminationOrder > 0
-  const bEliminated = b.eliminationOrder > 0
-  if (aEliminated !== bEliminated) return aEliminated ? 1 : -1
-  if (aEliminated && bEliminated) return b.eliminationOrder - a.eliminationOrder
-
-  return b.bonks - a.bonks
 }
 
 export function getServerResultsRevealLines(matchId: string): string[] {

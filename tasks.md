@@ -6,6 +6,9 @@ This document records all development tasks and progress for the Doge Hunt proje
 
 | Date | Task Description | Status | Executor | Notes |
 | :--- | :--- | :--- | :--- | :--- |
+| 2026-07-22 | Remove forced follow camera from gameplay | Completed | AI Assistant | Removed the VirtualCamera rig that recalculated its position and look direction from the player rotation every frame. Both desktop and mobile now retain Decentraland Explorer's default free camera during matches. Match-spawn `cameraTarget` remains only for the teleport moment. |
+| 2026-07-14 | Make authoritative leaderboard persistence explicit | Completed | AI Assistant | Changed leaderboard settlement to await initialization and each Storage write. A points-awarded message is now emitted only after both daily-cap and total-score writes succeed; failed total writes restore the in-memory score and attempt to restore the daily record. Verified with `tsc --noEmit`; deployed-World restart verification remains required. |
+| 2026-07-11 | Authoritative server leaderboard with daily caps and 3D lobby board | Completed | AI Assistant | Added server-owned scoring on `endActiveMatch()` with solo +1/day cap 10 and multi rank points 20/10/5/3/day cap 100 (UTC reset). Persisted totals via `Storage` and per-player daily caps via `Storage.player`. Synced Top 10 through `Leaderboard` component, added 3D lobby board, game-over points label, and shared ranking util. Verified with `tsc --noEmit` and `sdk-commands build`. Creator Hub playtest still required manually. |
 | 2026-06-02 | Translate README.md to English | Completed | AI Assistant | Completely rewrote README.md in English to match project standards. |
 | 2026-06-02 | Translate project rules and tasks to English | Completed | AI Assistant | Switched the language of documentation and rules to English as per user request. |
 | 2026-06-02 | Update README.md | Completed | AI Assistant | Rewrote README to reflect mobile goals, core rules (task logging/preview limits), and latest features. |
@@ -1691,6 +1694,7 @@ This document records all development tasks and progress for the Doge Hunt proje
     - This review did not manually exercise `roundEndRequest` / `roundEndResult`; that path is implemented and build-verified, but still needs a targeted round-end review before final hardening.
 
 ## Current Plans / To-Do List
+- [ ] Creator Hub manual verification for authoritative leaderboard: solo +1/day cap 10, multi rank 20/10/5/3/day cap 100, 3D lobby board refresh, Storage persistence across preview restart.
 - [ ] Continue manual playtesting to fine-tune `jump` duration and `Bonk` feel.
 - [ ] Monitor NPC state switching frequency (adjust `Bonk/jump` probability).
 - [ ] Verify the updated `MoonLobby1.glb` collider layout in playtests and trim any remaining false-positive wall hits.

@@ -15,6 +15,12 @@
 import { engine } from '@dcl/sdk/ecs'
 import { isServer } from '@dcl/sdk/network'
 
+import './shared/messages'
+import './shared/leaderboardSchemas'
+import { registerLeaderboardValidators } from './shared/leaderboardSchemas'
+import './shared/serverHeartbeat'
+import { registerServerHeartbeatValidators } from './shared/serverHeartbeat'
+
 import { GameState, isPlaying } from './gameState'
 import { createLobby, startLocalMatchFromLobby, returnToLobby } from './lobby'
 import { buildArena } from './arena'
@@ -46,7 +52,6 @@ import {
   type LocalMatchRuntimeSeed,
 } from './localMatchState'
 import { setupO4ClientDiagnostics, setupO4ServerDiagnostics } from './authDiagnostics'
-import { setupServerLobby } from './server/serverLobby'
 import { setServerMatchStartHandler, setupServerRoomClient } from './client/serverRoomClient'
 import {
   canLocalServerPlayerAct,
@@ -61,6 +66,9 @@ import {
 } from './client/serverPublicStateClient'
 import { setupServerGameplayClient } from './client/serverGameplayClient'
 import { syncRemotePlayerProxies } from './client/remotePlayerProxies'
+import { setupLeaderboardBoard } from './client/leaderboardBoard'
+import { setupLeaderboardClient, resetLeaderboardAward } from './client/leaderboardClient'
+import { setupGameAudio } from './client/gameAudio'
 
 let activeMatchConfig: LocalMatchConfig = getFallbackLocalMatchConfig()
 let gameInitialized = false
@@ -120,6 +128,7 @@ export function startGame(
   resetRoundTimer()
   resetGameOverFlag()
   resetCombat()
+  resetLeaderboardAward()
 
   // 1. Build the arena
   buildArena()
@@ -136,10 +145,18 @@ export function startGame(
   gameInitialized = true
 }
 
-export function main() {
+export async function main() {
+  registerLeaderboardValidators()
+  registerServerHeartbeatValidators()
+
   if (isServer()) {
     console.log('[Server] Doge Hunt authoritative server entry loaded.')
+    const [{ setupServerHeartbeat }, { setupServerLobby }] = await Promise.all([
+      import('./server/serverHeartbeat'),
+      import('./server/serverLobby'),
+    ])
     setupO4ServerDiagnostics()
+    setupServerHeartbeat()
     setupServerLobby()
     return
   }
@@ -149,6 +166,8 @@ export function main() {
   setupServerRoomClient()
   setupServerPublicStateClient()
   setupServerGameplayClient()
+  setupLeaderboardClient()
+  setupGameAudio()
   setServerMatchStartHandler(startLocalMatchFromLobby)
   console.log('Doge Hunt Proof of Concept loaded. Trust No Doge.')
 
@@ -193,6 +212,7 @@ export function main() {
 
   // 3. Create lobby
   createLobby()
+  setupLeaderboardBoard()
 
   // 4. Register game systems (only run when playing)
   engine.addSystem((dt: number) => {

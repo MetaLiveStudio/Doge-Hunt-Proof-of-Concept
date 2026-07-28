@@ -1,0 +1,8 @@
+export const SOLO_WIN_POINTS = 1
+export const SOLO_DAILY_CAP = 10
+export const MULTI_RANK_POINTS = [20, 10, 5, 3] as const
+export const MULTI_DAILY_CAP = 100
+export const LEADERBOARD_TOP_N = 100
+export const LEADERBOARD_PAGE_SIZE = 5
+export const LEADERBOARD_STORAGE_KEY = 'leaderboard:totals'
+export const LEADERBOARD_DAILY_STORAGE_KEY = 'daily'

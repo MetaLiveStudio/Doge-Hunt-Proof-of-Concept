@@ -2,6 +2,7 @@ import { engine, Transform } from '@dcl/sdk/ecs'
 import { Vector3 } from '@dcl/sdk/math'
 
 import { applyServerBonkAccepted } from '../combat'
+import { playBonkHitSound, playBonkMissSound } from './gameAudio'
 import { setGameplayResolvers } from '../gameResolvers'
 import type {
   BonkActionStartRequest,
@@ -80,9 +81,14 @@ export function setupServerGameplayClient(): void {
     }
 
     if (payload.outcome === 'accepted') {
+      playBonkHitSound()
       const applied = applyServerBonkAccepted(payload.targetPublicDogeId, toVector3(payload.origin))
       console.log(`[Client][S] bonkResult accepted requestId=${payload.requestId} target=${payload.targetPublicDogeId} applied=${applied} targetAlive=${payload.targetDogesAlive}/${payload.targetDogesTotal}`)
       return
+    }
+
+    if (payload.reason === 'invalid-target') {
+      playBonkMissSound()
     }
 
     console.log(`[Client][S] bonkResult rejected requestId=${payload.requestId} reason=${payload.reason} target=${payload.targetPublicDogeId}`)

@@ -9,13 +9,13 @@ import {
   TextShape, Billboard, BillboardMode,
 } from '@dcl/sdk/ecs'
 import { Vector3, Color4 } from '@dcl/sdk/math'
+import { isMobile } from '@dcl/sdk/platform'
 import { movePlayerTo } from '~system/RestrictedActions'
 import { GameState, setState } from './gameState'
 import { startGame } from './index'
 import { cleanupGame, resetGameState } from './gameReset'
 import { uiState } from './uiManager'
 import { hideHud } from './hud'
-import { enableFollowCamera, disableFollowCamera } from './cameraRig'
 import { leaveLocalRoom } from './localRoom'
 import { endLocalMatch } from './localMatch'
 import type { LocalMatchConfig } from './localMatch'
@@ -26,6 +26,9 @@ import {
   requestServerRoomSnapshot,
 } from './client/serverRoomClient'
 import { resetServerPublicMatchSnapshot } from './client/serverPublicStateClient'
+import { resetLeaderboardAward } from './client/leaderboardClient'
+import { setLeaderboardBoardVisible } from './client/leaderboardBoard'
+import { startGameMusic, stopGameAudio } from './client/gameAudio'
 
 // Lobby position
 const LOBBY_X = 48
@@ -36,12 +39,18 @@ const LOBBY_HIDDEN_X = 1000
 const LOBBY_HIDDEN_Y = -100
 const LOBBY_HIDDEN_Z = 1000
 const PLAYER_SPAWN_Y = 1.2
+const DESKTOP_LOBBY_MODEL_SRC = 'models/MoonLobby1.glb'
+const MOBILE_LOBBY_MODEL_SRC = 'models/MoonLobby1Mobile.glb'
 
 let lobbyRoot: Entity | null = null
 let lobbyModelEntity: Entity | null = null
 let startButtonEntity: Entity | null = null
 let lobbyLabelEntity: Entity | null = null
 let lastLobbyLabelText = ''
+
+function getLobbyModelSrc(): string {
+  return isMobile() ? MOBILE_LOBBY_MODEL_SRC : DESKTOP_LOBBY_MODEL_SRC
+}
 
 function setLobbyVisible(visible: boolean): void {
   if (lobbyRoot) {
@@ -81,7 +90,7 @@ export function createLobby(): void {
     scale: Vector3.create(1, 1, 1),
   })
   GltfContainer.create(lobbyModelEntity, {
-    src: 'models/MoonLobby1.glb',
+    src: getLobbyModelSrc(),
     // Prefer the model's dedicated collider meshes over the visible geometry.
     invisibleMeshesCollisionMask: ColliderLayer.CL_PHYSICS,
   })
@@ -172,12 +181,13 @@ export function startLocalMatchFromLobby(
   startGame(matchConfig, runtimeSeed)
   setState(GameState.PLAYING)
   setLobbyVisible(false)
+  setLeaderboardBoardVisible(false)
+  startGameMusic()
   const spawnPoint = matchConfig.localSpawnPoint
   movePlayerTo({
     newRelativePosition: spawnPoint?.position ?? { x: 48, y: PLAYER_SPAWN_Y, z: 48 },
     cameraTarget: spawnPoint?.cameraTarget,
   })
-  enableFollowCamera()
 }
 
 /** Return to lobby */
@@ -186,6 +196,7 @@ export function returnToLobby(): void {
   
   // Clean up game entities
   console.log('[Lobby] Step 1: Cleaning up game entities...')
+  stopGameAudio()
   cleanupGame()
   
   // Reset game state variables
@@ -195,7 +206,7 @@ export function returnToLobby(): void {
   // Teleport player back to lobby
   console.log('[Lobby] Step 3: Teleporting player to lobby...')
   setLobbyVisible(true)
-  disableFollowCamera()
+  setLeaderboardBoardVisible(true)
   movePlayerTo({
     newRelativePosition: { x: LOBBY_RETURN_X, y: PLAYER_SPAWN_Y, z: LOBBY_RETURN_Z },
   })
@@ -212,6 +223,7 @@ export function returnToLobby(): void {
   endLocalMatch()
   resetLocalMatchRuntimeState()
   resetServerPublicMatchSnapshot()
+  resetLeaderboardAward()
   hideHud()
   
   console.log('[Lobby] ========== RETURN TO LOBBY COMPLETE ==========')

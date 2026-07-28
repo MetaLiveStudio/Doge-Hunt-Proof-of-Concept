@@ -47,6 +47,7 @@ import { createServerNpcSnapshot } from '../shared/serverNpcSnapshot'
 import { getMatchSpawnPoint } from '../shared/playerSpawns'
 import type { LocalRoundEndReason, PublicDogeState } from '../localMatchState'
 import type { LocalMatchConfig, LocalMatchPlayerSlot } from '../localMatch'
+import { awardMatchLeaderboardPoints, setupLeaderboardServer } from './leaderboard'
 
 type ActiveServerMatch = {
   matchId: string
@@ -126,6 +127,10 @@ let activeMatch: ActiveServerMatch | null = null
 export function setupServerLobby(): void {
   if (serverLobbyStarted) return
   serverLobbyStarted = true
+
+  void setupLeaderboardServer().catch((error) => {
+    console.log('[Server][LB] Leaderboard initialization failed:', error)
+  })
 
   const room = getDogeRoom()
 
@@ -1303,6 +1308,21 @@ function endActiveMatch(reason: LocalRoundEndReason, winner?: ServerPublicPlayer
   }
 
   console.log(`[Server][V] activeMatch ended reason=${reason} winner=${activeMatch.winnerAddress || 'none'} matchId=${activeMatch.matchId}`)
+
+  const leaderboardMatchId = activeMatch.matchId
+
+  void awardMatchLeaderboardPoints({
+    matchId: leaderboardMatchId,
+    playerCount: activeMatch.playerCount,
+    endReason: reason,
+    winnerAddress: activeMatch.winnerAddress,
+    publicPlayers: activeMatch.publicPlayers,
+  }).then((persisted) => {
+    if (!persisted) {
+      console.log(`[Server][LB] Match ended without a persisted leaderboard award matchId=${leaderboardMatchId}`)
+    }
+  })
+
   broadcastRoomSnapshot('match-ended')
 }
 

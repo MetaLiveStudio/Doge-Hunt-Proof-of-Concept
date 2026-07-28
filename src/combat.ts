@@ -29,6 +29,7 @@ import {
   canLocalServerPlayerAct,
   getLocalServerPlayerStatus,
 } from './client/serverPublicStateClient'
+import { playBonkHitSound, playBonkMissSound } from './client/gameAudio'
 
 const KILL_MESSAGES = [
   'Such eliminate. Very dead. Wow.',
@@ -152,11 +153,18 @@ setGameplayResolvers({ resolveBonk: resolveLocalBonk })
 
 function applyBonkResult(result: BonkResult): boolean {
   if (result.outcome === 'pending') return true
-  if (result.outcome === 'miss') return false
+  if (result.outcome === 'miss') {
+    playBonkMissSound()
+    return false
+  }
 
   const publicDogeId = getNpcPublicDogeId(result.targetNpc)
   recordLocalBonkHit(publicDogeId)
-  return applyNpcBonkPresentation(result.targetNpc, result.request.origin, publicDogeId)
+  const applied = applyNpcBonkPresentation(result.targetNpc, result.request.origin, publicDogeId)
+  if (applied) {
+    playBonkHitSound()
+  }
+  return applied
 }
 
 export function applyServerBonkAccepted(publicDogeId: string, hitOrigin: Vector3): boolean {

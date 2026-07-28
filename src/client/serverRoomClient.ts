@@ -11,6 +11,10 @@ import { parseServerMatchStartPayload } from '../shared/serverMatch'
 import type { LocalMatchConfig } from '../localMatch'
 import type { LocalMatchRuntimeSeed } from '../localMatchState'
 import { setServerPublicLocalAddress } from './serverPublicStateClient'
+import {
+  SERVER_HEARTBEAT_TIMEOUT_SECONDS,
+  ServerHeartbeat,
+} from '../shared/serverHeartbeat'
 
 export type ServerRoomClientStatus = 'idle' | 'room-available' | 'match-in-progress' | 'settling' | 'connecting' | 'joining' | 'joined' | 'starting' | 'match-started' | 'left' | 'error'
 
@@ -24,6 +28,9 @@ let serverRequestElapsed = 0
 let joinRequestElapsed = 0
 let roomRefreshElapsed = 0
 let roomHeartbeatElapsed = 0
+let clientRuntimeSeconds = 0
+let lastServerHeartbeatTimestamp = 0
+let lastServerHeartbeatSeenAtSeconds = -1
 let hasReceivedRoomSnapshot = false
 let status: ServerRoomClientStatus = 'idle'
 let lastError = ''
@@ -31,6 +38,7 @@ let snapshot: ServerRoomSnapshot = createEmptyServerRoomSnapshot()
 let matchStartHandler: ((matchConfig: LocalMatchConfig, runtimeSeed?: LocalMatchRuntimeSeed) => void) | null = null
 let nextStartRequestId = 1
 const SERVER_RESPONSE_TIMEOUT_SECONDS = 10
+const SERVER_WAKE_TIMEOUT_SECONDS = 30
 const ROOM_SNAPSHOT_REFRESH_INTERVAL_SECONDS = 3
 const ROOM_HEARTBEAT_INTERVAL_SECONDS = 2
 
@@ -122,27 +130,30 @@ export function setupServerRoomClient(): void {
   })
 
   engine.addSystem((dt) => {
+    tickServerHeartbeat(dt)
     tickServerRoomTimeouts(dt)
     tickRoomSettlingCountdown(dt)
     tickRoomSnapshotAutoRefresh(dt)
     tickRoomHeartbeat(dt)
 
-    if (snapshotRequested && room.isReady() && isStateSyncronized()) {
+    if (snapshotRequested && isServerReadyForRequests()) {
       const reason = snapshotRequestReason
       snapshotRequested = false
       snapshotPendingResponse = true
+      serverRequestElapsed = 0
       void room.send('requestRoomSnapshot', { reason })
       console.log(`[Client][P] room snapshot requested after state sync. reason=${reason}`)
     }
 
     if (!joinRequested || joinSent) return
 
-    if (!room.isReady() || !isStateSyncronized()) {
+    if (!isServerReadyForRequests()) {
       status = 'connecting'
       return
     }
 
     joinSent = true
+    joinRequestElapsed = 0
     status = 'joining'
     void room.send('joinRoom', { displayName: 'You' })
     console.log('[Client][P] joinRoom sent after state sync.')
@@ -256,7 +267,7 @@ export function getServerRoomStatusLabel(): string {
   if (status === 'room-available') return `Room open v${snapshot.version}`
   if (status === 'match-in-progress') return 'Game in progress'
   if (status === 'settling') return 'Waiting for players to exit'
-  if (status === 'connecting') return hasReceivedRoomSnapshot ? 'Preparing room' : 'Connecting to match server'
+  if (status === 'connecting') return getConnectingStatusLabel()
   if (status === 'joining') return 'Joining room'
   if (status === 'joined') return `Room ready v${snapshot.version}`
   if (status === 'starting') return 'Starting match'
@@ -298,7 +309,7 @@ export function getLobbyRoomPrompt(): { statusLabel: string; actionLabel: string
 
   if (status === 'connecting' || status === 'joining') {
     return {
-      statusLabel: hasReceivedRoomSnapshot ? 'Preparing room' : 'Connecting to match server',
+      statusLabel: hasReceivedRoomSnapshot ? 'Preparing room' : getConnectingStatusLabel(),
       actionLabel: 'Click to Play Game',
     }
   }
@@ -319,7 +330,10 @@ export function getLobbyRoomPrompt(): { statusLabel: string; actionLabel: string
 function tickServerRoomTimeouts(dt: number): void {
   if (snapshotRequested || snapshotPendingResponse) {
     serverRequestElapsed += dt
-    if (serverRequestElapsed >= SERVER_RESPONSE_TIMEOUT_SECONDS) {
+    const timeoutSeconds = snapshotPendingResponse
+      ? SERVER_RESPONSE_TIMEOUT_SECONDS
+      : SERVER_WAKE_TIMEOUT_SECONDS
+    if (serverRequestElapsed >= timeoutSeconds) {
       snapshotRequested = false
       snapshotPendingResponse = false
       serverRequestElapsed = 0
@@ -331,7 +345,10 @@ function tickServerRoomTimeouts(dt: number): void {
 
   if (joinRequested && (status === 'connecting' || status === 'joining')) {
     joinRequestElapsed += dt
-    if (joinRequestElapsed >= SERVER_RESPONSE_TIMEOUT_SECONDS) {
+    const timeoutSeconds = joinSent
+      ? SERVER_RESPONSE_TIMEOUT_SECONDS
+      : SERVER_WAKE_TIMEOUT_SECONDS
+    if (joinRequestElapsed >= timeoutSeconds) {
       joinRequested = false
       joinSent = false
       joinRequestElapsed = 0
@@ -384,9 +401,37 @@ function tickRoomHeartbeat(dt: number): void {
 
 function shouldSendRoomHeartbeat(): boolean {
   if (!snapshot.isLocalPlayerInRoom) return false
-  if (!getDogeRoom().isReady() || !isStateSyncronized()) return false
+  if (!isServerReadyForRequests()) return false
   if (status === 'idle' || status === 'room-available' || status === 'match-in-progress') return false
   if (status === 'connecting' || status === 'joining' || status === 'left' || status === 'error') return false
 
   return true
+}
+
+function tickServerHeartbeat(dt: number): void {
+  clientRuntimeSeconds += dt
+
+  for (const [, heartbeat] of engine.getEntitiesWith(ServerHeartbeat)) {
+    if (heartbeat.timestamp === lastServerHeartbeatTimestamp) continue
+
+    lastServerHeartbeatTimestamp = heartbeat.timestamp
+    lastServerHeartbeatSeenAtSeconds = clientRuntimeSeconds
+  }
+}
+
+function isMultiplayerServerAlive(): boolean {
+  if (lastServerHeartbeatSeenAtSeconds < 0) return false
+
+  return clientRuntimeSeconds - lastServerHeartbeatSeenAtSeconds <= SERVER_HEARTBEAT_TIMEOUT_SECONDS
+}
+
+function isServerReadyForRequests(): boolean {
+  return getDogeRoom().isReady() && isStateSyncronized() && isMultiplayerServerAlive()
+}
+
+function getConnectingStatusLabel(): string {
+  if (!isStateSyncronized()) return 'Connecting to scene'
+  if (!isMultiplayerServerAlive()) return 'Match server is waking up'
+
+  return 'Connecting to match server'
 }

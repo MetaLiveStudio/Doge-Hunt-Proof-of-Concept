@@ -28,6 +28,7 @@ import type {
   ServerResultsRevealData,
 } from './client/serverPublicStateClient'
 import { getShortAddress } from './shared/serverRoom'
+import { getLeaderboardAwardLabel } from './client/leaderboardClient'
 
 const h = ReactEcs.createElement
 const DEBUG_CONTROLS_ENABLED = true
@@ -467,6 +468,7 @@ function renderGameOverUI() {
   const roomCloseLabel = roomCloseSeconds > 0
     ? `Room closes in ${roomCloseSeconds}s`
     : ''
+  const leaderboardLabel = getLeaderboardAwardLabel()
   const handleReturnToLobby = () => {
     console.log('[UI] Return to Lobby button clicked')
     console.log('[UI] onReturnToLobby exists?', !!onReturnToLobby)
@@ -543,6 +545,18 @@ function renderGameOverUI() {
           width: '100%',
           height: showReason ? compactResultLayout ? 18 : 22 : 6,
           margin: { bottom: compactResultLayout ? 6 : 10 },
+        },
+      }),
+      h(Label, {
+        key: 'leaderboardAward',
+        value: leaderboardLabel,
+        fontSize: compactResultLayout ? 12 : 15,
+        color: Color4.create(0.35, 1, 0.45, 1),
+        textAlign: 'middle-center',
+        uiTransform: {
+          width: '100%',
+          height: leaderboardLabel ? compactResultLayout ? 20 : 24 : 0,
+          margin: { bottom: leaderboardLabel ? compactResultLayout ? 6 : 8 : 0 },
         },
       }),
       h(UiEntity, {
