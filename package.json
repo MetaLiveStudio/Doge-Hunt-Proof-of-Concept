@@ -15,8 +15,7 @@
     "start": "sdk-commands start",
     "build": "sdk-commands build",
     "deploy": "sdk-commands deploy",
-    "server-logs": "sdk-commands sdk-server-logs",
-    "postinstall": "node scripts/patch-hammurabi-runtime.cjs"
+    "server-logs": "sdk-commands sdk-server-logs"
   },
   "overrides": {
     "@dcl/asset-packs": "2.15.2"

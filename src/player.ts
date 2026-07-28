@@ -44,7 +44,8 @@ const PLAYER_IDLE_CLIP = 'idel'
 const PLAYER_JUMP_CLIP = 'jump'
 const PLAYER_WALK_CLIP = 'walk'
 const PLAYER_RUN_CLIP = 'run'
-const PLAYER_DOGE_MODEL = 'models/Muscledoge.glb'
+const DESKTOP_PLAYER_DOGE_MODEL = 'models/Muscledoge.glb'
+const MOBILE_PLAYER_DOGE_MODEL = 'models/MuscledogeMobile.glb'
 const PLAYER_DEAD_DOGE_MODEL = 'models/SmallDoge.glb'
 const PLAYER_DOGE_SCALE = Vector3.create(1.5, 1.5, 1.5)
 const PLAYER_DEAD_DOGE_SCALE = Vector3.create(0.5, 0.5, 0.5)
@@ -54,6 +55,12 @@ const PLAYER_ELIMINATION_MIN_HEIGHT_SCALE = 0.2
 const PLAYER_ELIMINATION_FLATTEN_SCALE = 1.35
 export const PLAYER_ATTACK_ANIMATION_SPEED = 2.25
 export const PLAYER_ATTACK_IMPACT_TIME = 0.18
+
+function getPlayerDogeModelSrc(): string {
+  return getPlatform() === 'mobile'
+    ? MOBILE_PLAYER_DOGE_MODEL
+    : DESKTOP_PLAYER_DOGE_MODEL
+}
 export const PLAYER_ATTACK_TOTAL_DURATION = 1.02
 const PLAYER_ATTACK_MOVE_LOCK_DURATION = 0.75
 const PLAYER_JUMP_DURATION = 1.433
@@ -147,7 +154,7 @@ export function setupPlayerDisguise(): void {
     position: Vector3.create(CX, 0, CZ),
     scale: PLAYER_DOGE_SCALE,
   })
-  GltfContainer.create(dogeBody, { src: PLAYER_DOGE_MODEL })
+  GltfContainer.create(dogeBody, { src: getPlayerDogeModelSrc() })
   Animator.create(dogeBody, {
     states: [
       {
@@ -383,7 +390,7 @@ function resetDogeBodyModel(): void {
   const dogeEntity = dogeBodyEntity as Entity
   if (GltfContainer.has(dogeEntity)) {
     const gltf = GltfContainer.getMutable(dogeEntity)
-    gltf.src = PLAYER_DOGE_MODEL
+    gltf.src = getPlayerDogeModelSrc()
   }
 }
 

@@ -16,6 +16,7 @@ import { startGame } from './index'
 import { cleanupGame, resetGameState } from './gameReset'
 import { uiState } from './uiManager'
 import { hideHud } from './hud'
+import { enableFollowCamera, disableFollowCamera } from './cameraRig'
 import { leaveLocalRoom } from './localRoom'
 import { endLocalMatch } from './localMatch'
 import type { LocalMatchConfig } from './localMatch'
@@ -41,6 +42,8 @@ const LOBBY_HIDDEN_Z = 1000
 const PLAYER_SPAWN_Y = 1.2
 const DESKTOP_LOBBY_MODEL_SRC = 'models/MoonLobby1.glb'
 const MOBILE_LOBBY_MODEL_SRC = 'models/MoonLobby1Mobile.glb'
+const DESKTOP_START_BUTTON_MODEL_SRC = 'models/roblox_doge_hat.glb'
+const MOBILE_START_BUTTON_MODEL_SRC = 'models/roblox_doge_hat_Mobile.glb'
 
 let lobbyRoot: Entity | null = null
 let lobbyModelEntity: Entity | null = null
@@ -50,6 +53,10 @@ let lastLobbyLabelText = ''
 
 function getLobbyModelSrc(): string {
   return isMobile() ? MOBILE_LOBBY_MODEL_SRC : DESKTOP_LOBBY_MODEL_SRC
+}
+
+function getStartButtonModelSrc(): string {
+  return isMobile() ? MOBILE_START_BUTTON_MODEL_SRC : DESKTOP_START_BUTTON_MODEL_SRC
 }
 
 function setLobbyVisible(visible: boolean): void {
@@ -105,7 +112,7 @@ export function createLobby(): void {
   })
   MeshCollider.setBox(startButtonEntity)
   GltfContainer.create(startButtonEntity, {
-    src: 'models/roblox_doge_hat.glb',
+    src: getStartButtonModelSrc(),
     visibleMeshesCollisionMask: ColliderLayer.CL_PHYSICS | ColliderLayer.CL_POINTER,
   })
   
@@ -188,6 +195,7 @@ export function startLocalMatchFromLobby(
     newRelativePosition: spawnPoint?.position ?? { x: 48, y: PLAYER_SPAWN_Y, z: 48 },
     cameraTarget: spawnPoint?.cameraTarget,
   })
+  enableFollowCamera()
 }
 
 /** Return to lobby */
@@ -207,6 +215,7 @@ export function returnToLobby(): void {
   console.log('[Lobby] Step 3: Teleporting player to lobby...')
   setLobbyVisible(true)
   setLeaderboardBoardVisible(true)
+  disableFollowCamera()
   movePlayerTo({
     newRelativePosition: { x: LOBBY_RETURN_X, y: PLAYER_SPAWN_Y, z: LOBBY_RETURN_Z },
   })

@@ -8,6 +8,7 @@ import {
   VisibilityComponent,
 } from '@dcl/sdk/ecs'
 import { Quaternion, Vector3 } from '@dcl/sdk/math'
+import { isMobile } from '@dcl/sdk/platform'
 
 import type { PublicDogeVisualState } from '../localMatchState'
 import type { ServerPublicPlayerState } from '../shared/serverPublicState'
@@ -45,7 +46,8 @@ type RemoteTransform = {
   rotation: Quaternion
 }
 
-const DOGE_MODEL = 'models/Muscledoge.glb'
+const DESKTOP_DOGE_MODEL = 'models/Muscledoge.glb'
+const MOBILE_DOGE_MODEL = 'models/MuscledogeMobile.glb'
 const ROCK_MODEL = 'models/Moonstone.glb'
 const DEAD_DOGE_MODEL = 'models/SmallDoge.glb'
 const DOGE_SCALE = Vector3.create(1.5, 1.5, 1.5)
@@ -54,6 +56,10 @@ const DEAD_DOGE_SCALE = Vector3.create(0.5, 0.5, 0.5)
 const ROCK_OFFSET = Vector3.create(0, -0.3, 0)
 const HIDDEN_POSITION = Vector3.create(0, -20, 0)
 const MISSING_TRANSFORM_LOG_SECONDS = 2
+
+function getDogeModelSrc(): string {
+  return isMobile() ? MOBILE_DOGE_MODEL : DESKTOP_DOGE_MODEL
+}
 const REMOTE_ATTACK_ANIMATION_SECONDS = PLAYER_ATTACK_TOTAL_DURATION
 const REMOTE_JUMP_ANIMATION_SECONDS = 0.6
 const REMOTE_IDLE_SPEED_THRESHOLD = 0.15
@@ -165,7 +171,7 @@ function getOrCreateRemotePlayerProxy(player: ServerPublicPlayerState): RemotePl
     position: Vector3.Zero(),
     scale: DOGE_SCALE,
   })
-  GltfContainer.create(dogeVisual, { src: DOGE_MODEL })
+  GltfContainer.create(dogeVisual, { src: getDogeModelSrc() })
   VisibilityComponent.create(dogeVisual, { visible: false })
   Animator.create(dogeVisual, {
     states: [
@@ -342,7 +348,7 @@ function startRemotePlayerElimination(proxy: RemotePlayerProxy, remoteTransform:
 
   if (GltfContainer.has(proxy.dogeVisual)) {
     const gltf = GltfContainer.getMutable(proxy.dogeVisual)
-    gltf.src = DOGE_MODEL
+    gltf.src = getDogeModelSrc()
   }
 
   VisibilityComponent.createOrReplace(proxy.dogeVisual, { visible: true })
@@ -401,7 +407,7 @@ function resetRemoteEliminationVisual(proxy: RemotePlayerProxy): void {
   dogeTransform.scale = DOGE_SCALE
   if (GltfContainer.has(proxy.dogeVisual)) {
     const gltf = GltfContainer.getMutable(proxy.dogeVisual)
-    gltf.src = DOGE_MODEL
+    gltf.src = getDogeModelSrc()
   }
   proxy.currentAnimation = ''
 }

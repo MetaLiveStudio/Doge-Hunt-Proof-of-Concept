@@ -9,6 +9,7 @@ import {
   ColliderLayer, Raycast, RaycastQueryType, RaycastResult, Animator,
 } from '@dcl/sdk/ecs'
 import { Vector3, Color4, Quaternion } from '@dcl/sdk/math'
+import { isMobile } from '@dcl/sdk/platform'
 import { trackNpc } from './gameReset'
 import { PLAYER_RUN_SPEED, PLAYER_WALK_SPEED } from './player'
 import { getLocalPublicDogeState, recordLocalDogeEliminated } from './localMatchState'
@@ -51,8 +52,13 @@ export const NpcHitbox = engine.defineComponent('npcHitbox', {
 })
 
 // --- Model paths ---
-export const DOGE_MODEL = 'models/Muscledoge.glb'
+const DESKTOP_DOGE_MODEL = 'models/Muscledoge.glb'
+const MOBILE_DOGE_MODEL = 'models/MuscledogeMobile.glb'
 export const DEAD_DOGE_MODEL = 'models/SmallDoge.glb'
+
+function getDogeModelSrc(): string {
+  return isMobile() ? MOBILE_DOGE_MODEL : DESKTOP_DOGE_MODEL
+}
 
 export const NPC_VISUAL_SCALE = Vector3.create(1.5, 1.5, 1.5)
 export const NPC_HITBOX_OFFSET = Vector3.create(0, 1.3, 0)
@@ -529,7 +535,7 @@ function spawnNpc(id: number, publicDogeId: string): Entity {
     parent: root,
     scale: NPC_VISUAL_SCALE,
   })
-  GltfContainer.create(visual, { src: DOGE_MODEL })
+  GltfContainer.create(visual, { src: getDogeModelSrc() })
   createNpcAnimator(visual)
 
   const obstacleProbe = createNpcObstacleProbe(root)
