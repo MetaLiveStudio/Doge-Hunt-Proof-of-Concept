@@ -16,6 +16,7 @@ import { Color4, Quaternion, Vector3 } from '@dcl/sdk/math'
 
 import { LEADERBOARD_PAGE_SIZE } from '../shared/leaderboardConfig'
 import { Leaderboard } from '../shared/leaderboardSchemas'
+import { openLeaderboardRulesPopup } from '../uiManager'
 
 // Dog head ~ (48, 1.55, 48). Board offset 0.5m on X/Y from dog head.
 const DOG_HEAD_POSITION = Vector3.create(55, 1.5,54)
@@ -34,18 +35,20 @@ const TEXT_FACE_OFFSET_Z = BOARD_DEPTH / 2 + 0.02 * BOARD_SCALE
 const TEXT_FACE_ROTATION = Quaternion.fromEulerDegrees(0, 180, 0)
 
 const VISIBLE_ROWS = LEADERBOARD_PAGE_SIZE
-const ROW_HEIGHT = 0.52 * BOARD_SCALE
-const ROW_FONT_SIZE = 0.92 * BOARD_SCALE
-const TITLE_BAND = 1.05 * BOARD_SCALE
+const ROW_HEIGHT = 0.36 * BOARD_SCALE
+const ROW_FONT_SIZE = 1.84 * BOARD_SCALE
+const TITLE_BAND = 0.7 * BOARD_SCALE
 const BOTTOM_PAD = 0.3 * BOARD_SCALE
 const BOTTOM_EXTRA = 0.45 * BOARD_SCALE
 const ROWS_BAND = VISIBLE_ROWS * ROW_HEIGHT
 const BOARD_HEIGHT = Math.max(2.35 * BOARD_SCALE, TITLE_BAND + ROWS_BAND + BOTTOM_PAD) + BOTTOM_EXTRA
 const BOARD_TOP_Y = Math.max(2.35 * BOARD_SCALE, TITLE_BAND + ROWS_BAND + BOTTOM_PAD)
 const BOARD_CENTER_Y = BOARD_TOP_Y - BOARD_HEIGHT / 2
+const BOARD_BOTTOM_Y = BOARD_CENTER_Y - BOARD_HEIGHT / 2
 const TITLE_OFFSET_Y = BOARD_TOP_Y - BOARD_CENTER_Y - 0.28 * BOARD_SCALE
-const FIRST_ROW_OFFSET_Y = TITLE_OFFSET_Y - 0.62 * BOARD_SCALE
+const FIRST_ROW_OFFSET_Y = TITLE_OFFSET_Y - 0.6 * BOARD_SCALE
 const NAV_BUTTON_X = BOARD_WIDTH / 2 + 0.42 * BOARD_SCALE
+const NAV_BUTTON_SCALE = 2
 const NAME_MAX_LENGTH = 18
 
 const BOARD_FILL_COLOR = Color4.create(0.08, 0.14, 0.28, 1)
@@ -55,9 +58,9 @@ const NAV_BUTTON_COLOR = Color4.create(1, 0.84, 0, 1)
 
 let boardStarted = false
 let boardRoot: Entity | null = null
+let boardPanelEntity: Entity | null = null
 let textFaceRoot: Entity | null = null
 let titleEntity: Entity | null = null
-let pageIndicatorEntity: Entity | null = null
 let prevPageButton: Entity | null = null
 let nextPageButton: Entity | null = null
 let rowEntities: Entity[] = []
@@ -80,12 +83,27 @@ export function setupLeaderboardBoard(): void {
   })
   VisibilityComponent.create(boardRoot, { visible: true })
 
-  createBoardPanel(
+  boardPanelEntity = createBoardPanel(
     Vector3.create(0, BOARD_CENTER_Y, 0),
     Vector3.create(BOARD_WIDTH, BOARD_HEIGHT, BOARD_DEPTH),
     BOARD_FILL_COLOR,
     BOARD_BORDER_GLOW,
     0.15
+  )
+  MeshCollider.setBox(boardPanelEntity, ColliderLayer.CL_POINTER)
+  pointerEventsSystem.onPointerDown(
+    {
+      entity: boardPanelEntity,
+      opts: {
+        button: InputAction.IA_POINTER,
+        hoverText: 'View ranking rules',
+        maxDistance: 12,
+      },
+    },
+    () => {
+      if (!boardVisible) return
+      openLeaderboardRulesPopup()
+    }
   )
 
   createBoardBorderEntity(
@@ -121,26 +139,33 @@ export function setupLeaderboardBoard(): void {
     position: Vector3.create(0, TITLE_OFFSET_Y, 0),
   })
   TextShape.create(titleEntity, {
-    text: 'DOGE HUNT LEADERBOARD',
+    text: 'DOGE HUNT WEEKLY LEADERBOARD',
     fontSize: 1.35 * BOARD_SCALE,
     textColor: Color4.create(1, 0.84, 0, 1),
     textAlign: TextAlignMode.TAM_MIDDLE_CENTER,
   })
   VisibilityComponent.create(titleEntity, { visible: boardVisible })
 
-  pageIndicatorEntity = engine.addEntity()
-  boardEntities.push(pageIndicatorEntity)
-  Transform.create(pageIndicatorEntity, {
-    parent: textFaceRoot,
-    position: Vector3.create(0, TITLE_OFFSET_Y - 0.42 * BOARD_SCALE, 0),
+  const rulesHintEntity = engine.addEntity()
+  boardEntities.push(rulesHintEntity)
+  Transform.create(rulesHintEntity, {
+    parent: boardRoot,
+    position: Vector3.create(
+      0,
+      BOARD_BOTTOM_Y - 0.28 * BOARD_SCALE,
+      TEXT_FACE_OFFSET_Z
+    ),
+    rotation: TEXT_FACE_ROTATION,
   })
-  TextShape.create(pageIndicatorEntity, {
-    text: '',
-    fontSize: 0.72 * BOARD_SCALE,
-    textColor: Color4.create(0.82, 0.82, 0.86, 1),
+  TextShape.create(rulesHintEntity, {
+    text: 'Click leaderboard to see ranking rules',
+    fontSize: 2.64 * BOARD_SCALE,
+    textColor: Color4.create(1, 0.84, 0, 1),
+    outlineColor: Color4.Black(),
+    outlineWidth: 0.4,
     textAlign: TextAlignMode.TAM_MIDDLE_CENTER,
   })
-  VisibilityComponent.create(pageIndicatorEntity, { visible: boardVisible })
+  VisibilityComponent.create(rulesHintEntity, { visible: boardVisible })
 
   for (let i = 0; i < VISIBLE_ROWS; i++) {
     const rowEntity = engine.addEntity()
@@ -192,6 +217,10 @@ export function setLeaderboardBoardVisible(visible: boolean): void {
     VisibilityComponent.createOrReplace(entity, { visible })
   }
 
+  if (boardPanelEntity) {
+    setPointerColliderEnabled(boardPanelEntity, visible)
+  }
+
   renderLeaderboardPage()
 }
 
@@ -204,7 +233,7 @@ function createPageNavButton(
   if (!boardRoot) throw new Error('[Client][LB] boardRoot missing')
 
   const rowCenterY = BOARD_CENTER_Y + FIRST_ROW_OFFSET_Y - ((VISIBLE_ROWS - 1) * ROW_HEIGHT) / 2
-  const hitSize = 0.72 * BOARD_SCALE
+  const hitSize = 0.72 * BOARD_SCALE * NAV_BUTTON_SCALE
 
   const button = engine.addEntity()
   boardEntities.push(button)
@@ -279,6 +308,14 @@ function createBoardBorderEntity(position: Vector3, scale: Vector3): Entity {
   return createBoardPanel(position, scale, BOARD_BORDER_COLOR, BOARD_BORDER_COLOR, 0.25)
 }
 
+function setPointerColliderEnabled(entity: Entity, enabled: boolean): void {
+  if (enabled) {
+    MeshCollider.setBox(entity, ColliderLayer.CL_POINTER)
+  } else {
+    MeshCollider.deleteFrom(entity)
+  }
+}
+
 function refreshLeaderboardBoardSystem(): void {
   if (!boardVisible) return
 
@@ -300,15 +337,7 @@ function renderLeaderboardPage(): void {
   const startIndex = currentPage * VISIBLE_ROWS
 
   if (titleEntity) {
-    TextShape.getMutable(titleEntity).text = 'DOGE HUNT LEADERBOARD'
-  }
-
-  if (pageIndicatorEntity) {
-    const pageText = totalEntries > 0 ? `Page ${currentPage + 1}/${totalPages}` : 'No scores yet'
-    TextShape.getMutable(pageIndicatorEntity).text = pageText
-    VisibilityComponent.createOrReplace(pageIndicatorEntity, {
-      visible: boardVisible,
-    })
+    TextShape.getMutable(titleEntity).text = 'DOGE HUNT WEEKLY LEADERBOARD'
   }
 
   for (let i = 0; i < rowEntities.length; i++) {
@@ -316,9 +345,10 @@ function renderLeaderboardPage(): void {
     const entryIndex = startIndex + i
     const name = cachedNames[entryIndex]
     const score = cachedScores[entryIndex]
+    const rowText = TextShape.getMutable(rowEntity)
 
     if (!name) {
-      TextShape.getMutable(rowEntity).text = ''
+      rowText.text = ''
       VisibilityComponent.createOrReplace(rowEntity, { visible: boardVisible })
       continue
     }
@@ -326,7 +356,8 @@ function renderLeaderboardPage(): void {
     const rank = entryIndex + 1
     const medal = rank === 1 ? '#1' : rank === 2 ? '#2' : rank === 3 ? '#3' : `${rank}.`
     const label = truncateName(name, NAME_MAX_LENGTH)
-    TextShape.getMutable(rowEntity).text = `${medal} ${label} - ${score}`
+    rowText.text = `${medal} ${label} - ${score}`
+    rowText.textColor = Color4.White()
     VisibilityComponent.createOrReplace(rowEntity, { visible: boardVisible })
   }
 
@@ -334,9 +365,11 @@ function renderLeaderboardPage(): void {
 
   if (prevPageButton) {
     VisibilityComponent.createOrReplace(prevPageButton, { visible: showNav })
+    setPointerColliderEnabled(prevPageButton, showNav)
   }
   if (nextPageButton) {
     VisibilityComponent.createOrReplace(nextPageButton, { visible: showNav })
+    setPointerColliderEnabled(nextPageButton, showNav)
   }
 }
 
