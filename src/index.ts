@@ -56,6 +56,7 @@ import { setServerMatchStartHandler, setupServerRoomClient } from './client/serv
 import {
   canLocalServerPlayerAct,
   isLocalSpectatorPresentation,
+  getLocalServerPlayerBonks,
   getLocalServerPlayerStatus,
   getLocalServerPlayerStatusLabel,
   getServerResultsRevealLines,
@@ -82,8 +83,9 @@ let pendingGameOverDelay = 0
 const ROUND_END_VISUAL_DELAY_SECONDS = 0.35
 
 function readLocalMatchStats() {
+  const authoritativeBonks = getLocalServerPlayerBonks()
   const localStats = getLocalPresentationMatchState({
-    bonks: totalBonks,
+    bonks: authoritativeBonks ?? totalBonks,
     alive: aliveCount,
     total: activeMatchConfig.decoyNpcCount,
     timeLeft: roundTimeLeft,

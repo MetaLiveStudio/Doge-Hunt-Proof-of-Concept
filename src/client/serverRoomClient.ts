@@ -308,6 +308,21 @@ export function requestServerMatchStart(mode: 'solo' | 'party'): void {
   console.log(`[Client][Q] requestStartMatch sent requestId=${requestId} mode=${mode}`)
 }
 
+export function requestServerMatchStartCancel(): void {
+  if (status !== 'starting') {
+    console.log(`[Client][Q] cancelMatchStart ignored status=${status}`)
+    return
+  }
+  if (!snapshot.localPlayerIsHost) {
+    console.log('[Client][Q] cancelMatchStart ignored not-host')
+    return
+  }
+
+  void getDogeRoom().send('cancelMatchStart', { reason: 'ui-cancel' })
+  requestServerRoomSnapshot('match-countdown-cancel')
+  console.log('[Client][Q] cancelMatchStart sent')
+}
+
 export function getServerRoomSnapshot(): ServerRoomSnapshot {
   return snapshot
 }
@@ -318,12 +333,12 @@ export function getServerRoomClientStatus(): ServerRoomClientStatus {
 
 export function getServerRoomStatusLabel(): string {
   if (status === 'idle') return 'No room open'
-  if (status === 'room-available') return `Room open v${snapshot.version}`
+  if (status === 'room-available') return 'Room open'
   if (status === 'match-in-progress') return 'Game in progress'
   if (status === 'settling') return 'Waiting for players to exit'
   if (status === 'connecting') return getConnectingStatusLabel()
   if (status === 'joining') return 'Joining room'
-  if (status === 'joined') return `Room ready v${snapshot.version}`
+  if (status === 'joined') return 'Room ready'
   if (status === 'starting') return snapshot.startCountdownSeconds > 0
     ? `Match starts in ${snapshot.startCountdownSeconds}s`
     : 'Starting match'
@@ -363,8 +378,8 @@ export function getLobbyRoomPrompt(): { statusLabel: string; actionLabel: string
 
   if (snapshot.phase === 'waiting' && snapshot.playerCount > 0) {
     const statusLabel = snapshot.isLocalPlayerInRoom
-      ? `Room ready ${snapshot.playerCount}/${snapshot.maxPlayers} v${snapshot.version}`
-      : `Room open ${snapshot.playerCount}/${snapshot.maxPlayers} v${snapshot.version}`
+      ? `Room ready ${snapshot.playerCount}/${snapshot.maxPlayers}`
+      : `Room open ${snapshot.playerCount}/${snapshot.maxPlayers}`
 
     return {
       statusLabel,

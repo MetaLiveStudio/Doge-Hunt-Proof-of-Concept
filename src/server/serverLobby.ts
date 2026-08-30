@@ -231,6 +231,12 @@ export function setupServerLobby(): void {
     handleRequestStartMatch(context, data.requestId, data.mode)
   })
 
+  room.onMessage('cancelMatchStart', (data, context) => {
+    if (!context) return
+
+    handleCancelMatchStart(context, data.reason)
+  })
+
   room.onMessage('bonkRequest', (data, context) => {
     if (!context) return
 
@@ -580,12 +586,43 @@ function handleRequestStartMatch(context: EventContext, requestId: string, reque
   broadcastRoomSnapshot('match-countdown-started')
 }
 
+function handleCancelMatchStart(context: EventContext, reason: string): void {
+  const address = normalizeAddress(context.from)
+  const requester = players.find((player) => player.address === address)
+
+  if (!requester?.isHost) {
+    console.log(`[Server][Q] cancelMatchStart rejected not-host address=${address}`)
+    void getDogeRoom().send('matchError', {
+      code: 'not-host',
+      message: 'Only the host can cancel the match countdown',
+    }, { to: [address] })
+    return
+  }
+
+  if (!pendingMatchStart) {
+    console.log(`[Server][Q] cancelMatchStart ignored no-pending-start address=${address}`)
+    return
+  }
+
+  if (pendingMatchStart.requestedBy !== address) {
+    console.log(`[Server][Q] cancelMatchStart rejected not-requester address=${address} requestId=${pendingMatchStart.requestId}`)
+    void getDogeRoom().send('matchError', {
+      code: 'not-start-requester',
+      message: 'Only the host who started the countdown can cancel it',
+    }, { to: [address] })
+    return
+  }
+
+  cancelPendingMatchStart(`host-cancelled:${reason || 'none'}`)
+  broadcastRoomSnapshot('match-countdown-cancelled-by-host')
+}
+
 function canStartCurrentRoom(mode: 'solo' | 'party'): boolean {
   if (activeMatch || pendingMatchStart) return false
   if (mode === 'solo') {
     return players.length === 1 && players[0].isHost && players[0].isReady
   }
-  return players.length >= 2 && players.every((player) => player.isReady)
+  return players.length >= 2 && players.every((player) => player.isHost || player.isReady)
 }
 
 function cancelPendingMatchStart(reason: string): void {
@@ -630,7 +667,7 @@ function canStartPendingRoom(mode: 'solo' | 'party'): boolean {
   if (mode === 'solo') {
     return players.length === 1 && players[0].isHost && players[0].isReady
   }
-  return players.length >= 2 && players.every((player) => player.isReady)
+  return players.length >= 2 && players.every((player) => player.isHost || player.isReady)
 }
 
 function handleBonkRequest(context: EventContext, payloadJson: string): void {
@@ -1153,7 +1190,7 @@ function buildRoomSnapshotForRecipient(recipientAddress: string, version: number
         : players.length > 0
           ? 'waiting'
           : 'empty'
-  const canHostStart = phase === 'waiting' && players.length >= 2 && players.every((player) => player.isReady)
+  const canHostStart = phase === 'waiting' && players.length >= 2 && players.every((player) => player.isHost || player.isReady)
   const canHostStartSolo = phase === 'waiting' && players.length === 1 && Boolean(host?.isReady)
   const settlingSecondsRemaining = activeMatch?.phase === 'ended'
     ? Math.max(0, Math.ceil(SERVER_ROOM_SETTLING_TIMEOUT_SECONDS - activeMatch.settlingElapsedSeconds))

@@ -15,6 +15,7 @@ import {
   getServerRoomSnapshot,
   getServerRoomStatusLabel,
   requestServerMatchStart,
+  requestServerMatchStartCancel,
   requestServerRoomReady,
   requestServerRoomJoin,
   requestServerMatchSpectate,
@@ -89,6 +90,8 @@ export const uiState = {
   showGameOver: false,
   showHud: false,
   showLeaderboardRules: false,
+  showSoloStartConfirmation: false,
+  pendingSoloStart: false,
   waitingRoomPage: 0,
   resultPage: 0,
 }
@@ -310,30 +313,52 @@ function renderWaitingRoomUI() {
   const canStartMatch = roomStatus === 'joined' && localIsHost && room.canHostStart
   const canStartSolo = roomStatus === 'joined' && localIsHost && room.canHostStartSolo
   const canToggleReady = roomStatus === 'joined' && localInRoom
+  const isSoloHost = localIsHost && room.playerCount === 1
+  const isPartyHost = localIsHost && room.playerCount > 1
+
+  if (uiState.pendingSoloStart) {
+    if (!isSoloHost || isStarting || !localInRoom) {
+      uiState.pendingSoloStart = false
+    } else if (localIsReady && canStartSolo) {
+      uiState.pendingSoloStart = false
+      console.log('[UI] Solo confirmation ready sync complete; requesting authoritative start')
+      requestServerMatchStart('solo')
+    }
+  }
+
+  const canShowSoloStartConfirmation = uiState.showSoloStartConfirmation
+    && roomStatus === 'joined'
+    && localInRoom
+    && isSoloHost
+  if (uiState.showSoloStartConfirmation && !canShowSoloStartConfirmation) {
+    uiState.showSoloStartConfirmation = false
+  }
+  if (canShowSoloStartConfirmation) {
+    return renderSoloStartConfirmationUI()
+  }
+
   const primaryButtonLabel = isStarting
     ? 'STARTING'
-    : !localIsReady
+    : isSoloHost
+      ? 'START GAME'
+      : isPartyHost
+        ? 'START GAME'
+      : !localIsReady
       ? "I'M READY"
-      : localIsHost
-        ? room.playerCount === 1 ? 'PLAY SOLO' : 'START MATCH'
-        : 'UNREADY'
+      : 'UNREADY'
   const primaryButtonDisabled = isStarting
-    || (!localIsReady && !canToggleReady)
-    || (localIsReady && localIsHost && room.playerCount === 1 && !canStartSolo)
-    || (localIsReady && localIsHost && room.playerCount > 1 && !canStartMatch)
-    || (localIsReady && !localIsHost && !canToggleReady)
+    || (isSoloHost && !canToggleReady)
+    || (isPartyHost && !canStartMatch)
+    || (!isSoloHost && !localIsReady && !canToggleReady)
+    || (!isSoloHost && !isPartyHost && localIsReady && !localIsHost && !canToggleReady)
   const startHint = isStarting
     ? room.startCountdownSeconds > 0
       ? `Match starts in ${room.startCountdownSeconds}s`
       : 'Starting match on server'
-    : localIsHost
-      ? !localIsReady
-        ? 'Host: ready up before starting'
-        : room.playerCount === 1
-          ? 'Wait for players or play solo'
-          : room.canHostStart
-            ? 'Everyone is ready. Start the match when ready.'
-            : 'Waiting for every player to be ready'
+    : isSoloHost
+      ? 'You are the host. Start the game when everyone is ready, or play solo.'
+      : isPartyHost
+        ? 'You are the host. Start the game when everyone is ready.'
       : localInRoom
         ? localIsReady
           ? 'Ready. Waiting for host to start'
@@ -355,14 +380,14 @@ function renderWaitingRoomUI() {
       player.address.toLowerCase() === room.recipientAddress.toLowerCase()
     )
     const statusText = player.isHost
-      ? player.isReady ? 'HOST • READY' : 'HOST • WAITING'
+      ? 'HOST'
       : player.isSimulated
         ? 'SIM READY'
         : player.isReady
           ? 'READY'
           : 'WAITING'
     const statusColor = player.isHost
-      ? player.isReady ? Color4.create(1, 0.84, 0, 1) : Color4.create(0.8, 0.8, 0.8, 1)
+      ? Color4.create(1, 0.84, 0, 1)
       : player.isReady
         ? Color4.create(0.22, 1, 0.08, 1)
         : Color4.create(0.8, 0.8, 0.8, 1)
@@ -467,18 +492,6 @@ function renderWaitingRoomUI() {
         (page) => { uiState.waitingRoomPage = page },
         compact
       )] : []),
-      h(Label, {
-        key: 'serverStatus',
-        value: startHint,
-        fontSize: compact ? 18 : 14,
-        color: roomStatus === 'error'
-          ? Color4.create(1, 0.2, 0.2, 1)
-          : localInRoom
-            ? Color4.create(0.22, 1, 0.08, 1)
-            : Color4.create(0.8, 0.8, 0.8, 1),
-        textAlign: 'middle-center',
-        uiTransform: { width: '100%', height: compact ? 'auto' : 28, minHeight: compact ? 32 : undefined, margin: { bottom: 8 } },
-      }),
       h(UiEntity, {
         key: 'waitingRoomActions',
         uiTransform: {
@@ -487,6 +500,7 @@ function renderWaitingRoomUI() {
           flexDirection: 'row',
           alignItems: 'center',
           justifyContent: 'center',
+          margin: { bottom: compact ? 10 : 8 },
         },
       }, [
         h(Button, {
@@ -498,19 +512,22 @@ function renderWaitingRoomUI() {
           fontSize: compact ? 18 : 18,
           onMouseDown: () => {
             if (isStarting) return
+            if (isSoloHost) {
+              if (!canToggleReady) return
+              uiState.showSoloStartConfirmation = true
+              console.log('[UI] Solo start confirmation opened')
+              return
+            }
+            if (isPartyHost) {
+              if (!canStartMatch) return
+              console.log('[UI] Host requested authoritative party start')
+              requestServerMatchStart('party')
+              return
+            }
             if (!localIsReady) {
               if (!canToggleReady) return
               console.log('[UI] Server room ready toggle clicked nextReady=true')
               requestServerRoomReady(true)
-              return
-            }
-
-            if (localIsHost) {
-              const mode = room.playerCount === 1 ? 'solo' : 'party'
-              if (mode === 'solo' && !canStartSolo) return
-              if (mode === 'party' && !canStartMatch) return
-              console.log(`[UI] Request server match start clicked mode=${mode}`)
-              requestServerMatchStart(mode)
               return
             }
 
@@ -523,17 +540,119 @@ function renderWaitingRoomUI() {
           key: 'leave',
           value: isStarting ? 'CANCEL' : 'LEAVE',
           variant: 'secondary',
+          disabled: isStarting && !localIsHost,
           uiTransform: { width: compact ? '44%' : '48%', height: 58 },
           fontSize: compact ? 18 : 16,
           onMouseDown: () => {
-            console.log(isStarting ? '[UI] Match countdown cancelled locally' : '[UI] Leave server room clicked')
-            requestServerRoomLeave(isStarting ? 'match-countdown-cancelled' : 'ui-leave')
+            if (isStarting) {
+              console.log('[UI] Match countdown cancellation requested')
+              requestServerMatchStartCancel()
+              return
+            }
+
+            console.log('[UI] Leave server room clicked')
+            requestServerRoomLeave('ui-leave')
             leaveLocalRoom()
             uiState.showWaitingRoom = false
+            uiState.showSoloStartConfirmation = false
+            uiState.pendingSoloStart = false
             uiState.waitingRoomPage = 0
           },
         }),
       ]),
+      h(Label, {
+        key: 'serverStatus',
+        value: startHint,
+        fontSize: compact ? 18 : 14,
+        color: roomStatus === 'error'
+          ? Color4.create(1, 0.2, 0.2, 1)
+          : localInRoom
+            ? Color4.create(0.22, 1, 0.08, 1)
+            : Color4.create(0.8, 0.8, 0.8, 1),
+        textAlign: 'middle-center',
+        uiTransform: { width: '100%', height: compact ? 'auto' : 28, minHeight: compact ? 32 : undefined },
+      }),
+    ]),
+  ])
+}
+
+function renderSoloStartConfirmationUI() {
+  const compact = isMobile()
+  const room = getServerRoomSnapshot()
+
+  return h(UiEntity, {
+    uiTransform: {
+      width: '100%',
+      height: '100%',
+      positionType: 'absolute',
+      position: { left: 0, top: 0 },
+      flexDirection: 'column',
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+  }, [
+    h(UiEntity, {
+      key: 'soloConfirmationModal',
+      uiTransform: {
+        width: compact ? MOBILE_MODAL_LAYOUT.width : 460,
+        height: 'auto',
+        minHeight: compact ? 300 : 260,
+        flexDirection: 'column',
+        alignItems: 'center',
+        justifyContent: 'center',
+        padding: compact
+          ? { top: 24, bottom: 24, left: 24, right: 24 }
+          : { top: 30, bottom: 30, left: 36, right: 36 },
+      },
+      uiBackground: { color: Color4.create(0.08, 0.08, 0.12, 0.97) },
+    }, [
+      h(Label, {
+        key: 'soloConfirmationTitle',
+        value: 'PLAY SOLO?',
+        fontSize: compact ? 28 : 24,
+        color: Color4.create(1, 0.84, 0, 1),
+        textAlign: 'middle-center',
+        uiTransform: { width: '100%', height: compact ? 42 : 38, margin: { bottom: compact ? 16 : 12 } },
+      }),
+      h(Label, {
+        key: 'soloConfirmationQuestion',
+        value: 'Are you sure that you wanna play solo?',
+        fontSize: compact ? 18 : 16,
+        color: Color4.White(),
+        textAlign: 'middle-center',
+        uiTransform: { width: '100%', height: compact ? 'auto' : 32, minHeight: compact ? 42 : undefined, margin: { bottom: compact ? 22 : 20 } },
+      }),
+      h(Button, {
+        key: 'confirmSoloYes',
+        value: 'YES, I NEED PRACTICE',
+        variant: 'primary',
+        uiTransform: { width: compact ? '84%' : 300, height: compact ? 58 : 54, margin: { bottom: 12 } },
+        fontSize: compact ? 16 : 15,
+        onMouseDown: () => {
+          uiState.showSoloStartConfirmation = false
+          if (room.localPlayerIsReady && room.canHostStartSolo) {
+            console.log('[UI] Solo start confirmed; requesting authoritative start')
+            requestServerMatchStart('solo')
+            return
+          }
+
+          uiState.pendingSoloStart = true
+          console.log('[UI] Solo start confirmed; syncing ready state before authoritative start')
+          requestServerRoomReady(true)
+        },
+      }),
+      h(Button, {
+        key: 'confirmSoloNo',
+        value: "NO, I'LL WAIT FOR OTHERS",
+        variant: 'secondary',
+        uiTransform: { width: compact ? '84%' : 300, height: compact ? 54 : 50 },
+        fontSize: compact ? 16 : 15,
+        onMouseDown: () => {
+          uiState.showSoloStartConfirmation = false
+          uiState.pendingSoloStart = false
+          console.log('[UI] Solo start confirmation declined')
+        },
+      }),
     ]),
   ])
 }
@@ -959,7 +1078,7 @@ function renderLobbyHowToUI() {
     }),
     h(Label, {
       key: 'rule1',
-      value: 'Click the Doge head to create or join a room.',
+      value: '1/ Click the Doge head to create or join a room.',
       fontSize: bodyFontSize,
       color: WHITE,
       textAlign: 'middle-left',
@@ -967,7 +1086,7 @@ function renderLobbyHowToUI() {
     }),
     h(Label, {
       key: 'rule2',
-      value: 'Ready up, then host starts the game.',
+      value: '2/ Ready up, then host starts the game.',
       fontSize: bodyFontSize,
       color: WHITE,
       textAlign: 'middle-left',
@@ -975,15 +1094,7 @@ function renderLobbyHowToUI() {
     }),
     h(Label, {
       key: 'rule3',
-      value: 'All Doges look identical.',
-      fontSize: bodyFontSize,
-      color: WHITE,
-      textAlign: 'middle-left',
-      uiTransform: { width: '100%', height: 'auto', margin: { bottom: lineGap } },
-    }),
-    h(Label, {
-      key: 'rule4',
-      value: 'BONK suspicious Doges to eliminate real players.',
+      value: '3/ All Doges look identical. BONK suspicious Doges to eliminate real players.',
       fontSize: bodyFontSize,
       color: WHITE,
       textAlign: 'middle-left',

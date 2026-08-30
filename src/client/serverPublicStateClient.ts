@@ -153,6 +153,10 @@ export function getLocalServerPublicPlayer(): ServerPublicPlayerState | null {
   return latestSnapshot.players.length === 1 ? latestSnapshot.players[0] : null
 }
 
+export function getLocalServerPlayerBonks(): number | null {
+  return getLocalServerPublicPlayer()?.bonks ?? null
+}
+
 export function getLocalServerPlayerStatus(): ServerPlayerStatus | 'unknown' {
   return getLocalServerPublicPlayer()?.status ?? 'unknown'
 }

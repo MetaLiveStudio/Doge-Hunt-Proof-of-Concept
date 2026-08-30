@@ -31,6 +31,9 @@ export const DogeMessages = {
     requestId: Schemas.String,
     mode: Schemas.String,
   }),
+  cancelMatchStart: Schemas.Map({
+    reason: Schemas.String,
+  }),
   matchStarted: Schemas.Map({
     payloadJson: Schemas.String,
   }),
