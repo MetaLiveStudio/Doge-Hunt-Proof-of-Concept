@@ -1,5 +1,6 @@
-import { engine } from '@dcl/sdk/ecs'
+import { AvatarBase, engine } from '@dcl/sdk/ecs'
 import { isStateSyncronized } from '@dcl/sdk/network'
+import { getPlayer } from '@dcl/sdk/players'
 
 import { getDogeRoom } from '../shared/messages'
 import {
@@ -10,24 +11,29 @@ import {
 import { parseServerMatchStartPayload } from '../shared/serverMatch'
 import type { LocalMatchConfig } from '../localMatch'
 import type { LocalMatchRuntimeSeed } from '../localMatchState'
-import { setServerPublicLocalAddress } from './serverPublicStateClient'
+import { setServerPublicLocalAddress, setServerSpectatorMode } from './serverPublicStateClient'
 import {
   SERVER_HEARTBEAT_TIMEOUT_SECONDS,
   ServerHeartbeat,
 } from '../shared/serverHeartbeat'
+import { primeGameAudioFromUserAction } from './gameAudio'
 
 export type ServerRoomClientStatus = 'idle' | 'room-available' | 'match-in-progress' | 'settling' | 'connecting' | 'joining' | 'joined' | 'starting' | 'match-started' | 'left' | 'error'
 
 let clientLobbyStarted = false
 let joinRequested = false
 let joinSent = false
+let spectateRequested = false
+let spectateSent = false
 let snapshotRequested = false
 let snapshotPendingResponse = false
+let startupSnapshotRequested = false
 let snapshotRequestReason = 'ui-open'
 let serverRequestElapsed = 0
 let joinRequestElapsed = 0
 let roomRefreshElapsed = 0
 let roomHeartbeatElapsed = 0
+let lastSentDisplayName = ''
 let clientRuntimeSeconds = 0
 let lastServerHeartbeatTimestamp = 0
 let lastServerHeartbeatSeenAtSeconds = -1
@@ -35,7 +41,7 @@ let hasReceivedRoomSnapshot = false
 let status: ServerRoomClientStatus = 'idle'
 let lastError = ''
 let snapshot: ServerRoomSnapshot = createEmptyServerRoomSnapshot()
-let matchStartHandler: ((matchConfig: LocalMatchConfig, runtimeSeed?: LocalMatchRuntimeSeed) => void) | null = null
+let matchStartHandler: ((matchConfig: LocalMatchConfig, runtimeSeed?: LocalMatchRuntimeSeed, isResume?: boolean) => void) | null = null
 let nextStartRequestId = 1
 const SERVER_RESPONSE_TIMEOUT_SECONDS = 10
 const SERVER_WAKE_TIMEOUT_SECONDS = 30
@@ -73,6 +79,10 @@ export function setupServerRoomClient(): void {
     }
 
     snapshot = parsed
+    if (parsed.recipientAddress) {
+      setServerPublicLocalAddress(parsed.recipientAddress)
+      setServerSpectatorMode(parsed.isLocalSpectator)
+    }
     lastError = ''
     snapshotRequested = false
     snapshotPendingResponse = false
@@ -82,7 +92,7 @@ export function setupServerRoomClient(): void {
     hasReceivedRoomSnapshot = true
 
     if (parsed.phase === 'active') {
-      status = parsed.isLocalPlayerInRoom ? 'match-started' : 'match-in-progress'
+      status = parsed.isLocalPlayerInRoom || parsed.isLocalSpectator ? 'match-started' : 'match-in-progress'
       joinRequested = false
       joinSent = false
     } else if (parsed.phase === 'settling') {
@@ -90,9 +100,13 @@ export function setupServerRoomClient(): void {
       joinRequested = false
       joinSent = false
     } else if (parsed.isLocalPlayerInRoom) {
-      status = parsed.phase === 'waiting' ? 'joined' : 'left'
-      joinRequested = parsed.phase === 'waiting'
-      joinSent = parsed.phase === 'waiting'
+      status = parsed.phase === 'waiting'
+        ? 'joined'
+        : parsed.phase === 'starting'
+          ? 'starting'
+          : 'left'
+      joinRequested = parsed.phase === 'waiting' || parsed.phase === 'starting'
+      joinSent = parsed.phase === 'waiting' || parsed.phase === 'starting'
     } else if (joinRequested || joinSent) {
       status = joinSent ? 'joining' : 'connecting'
     } else {
@@ -123,10 +137,13 @@ export function setupServerRoomClient(): void {
     status = 'match-started'
     lastError = ''
     setServerPublicLocalAddress(payload.recipientAddress)
-    console.log(`[Client][Q] matchStarted received matchId=${payload.matchConfig.matchId} players=${payload.matchConfig.playerCount} decoys=${payload.matchConfig.decoyNpcCount} version=${payload.version}`)
+    setServerSpectatorMode(Boolean(payload.isSpectator))
+    spectateRequested = false
+    spectateSent = false
+    console.log(`[Client][Q] matchStarted received matchId=${payload.matchConfig.matchId} players=${payload.matchConfig.playerCount} decoys=${payload.matchConfig.decoyNpcCount} spectator=${Boolean(payload.isSpectator)} resume=${Boolean(payload.isResume)} version=${payload.version}`)
 
     if (matchStartHandler) {
-      matchStartHandler(payload.matchConfig, payload.runtimeSeed)
+      matchStartHandler(payload.matchConfig, payload.runtimeSeed, Boolean(payload.isResume))
     } else {
       console.log('[Client][Q] matchStarted ignored because no start handler is registered.')
     }
@@ -144,6 +161,21 @@ export function setupServerRoomClient(): void {
     tickRoomSettlingCountdown(dt)
     tickRoomSnapshotAutoRefresh(dt)
     tickRoomHeartbeat(dt)
+    refreshLocalDisplayName(room)
+
+    if (!startupSnapshotRequested && isServerReadyForRequests()) {
+      startupSnapshotRequested = true
+      requestServerRoomSnapshot('scene-resume')
+      console.log('[Client][P] startup room snapshot requested. reason=scene-resume')
+    }
+
+    if (spectateRequested && !spectateSent && isServerReadyForRequests()) {
+      spectateSent = true
+      status = 'joining'
+      const displayName = getLocalDisplayName()
+      void room.send('spectateMatch', { displayName })
+      console.log(`[Client][Spectator] watch request sent displayName=${displayName}`)
+    }
 
     if (snapshotRequested && isServerReadyForRequests()) {
       const reason = snapshotRequestReason
@@ -164,25 +196,37 @@ export function setupServerRoomClient(): void {
     joinSent = true
     joinRequestElapsed = 0
     status = 'joining'
-    void room.send('joinRoom', { displayName: 'You' })
-    console.log('[Client][P] joinRoom sent after state sync.')
+    lastSentDisplayName = getLocalDisplayName()
+    void room.send('joinRoom', { displayName: lastSentDisplayName })
+    console.log(`[Client][P] joinRoom sent after state sync. displayName=${lastSentDisplayName}`)
   })
 }
 
 export function setServerMatchStartHandler(
-  handler: (matchConfig: LocalMatchConfig, runtimeSeed?: LocalMatchRuntimeSeed) => void
+  handler: (matchConfig: LocalMatchConfig, runtimeSeed?: LocalMatchRuntimeSeed, isResume?: boolean) => void
 ): void {
   matchStartHandler = handler
 }
 
 export function requestServerRoomJoin(): void {
+  primeGameAudioFromUserAction('join-room')
+  setServerSpectatorMode(false)
   joinRequested = true
   joinSent = false
   joinRequestElapsed = 0
   roomHeartbeatElapsed = 0
+  lastSentDisplayName = ''
   status = hasReceivedRoomSnapshot ? 'joining' : 'connecting'
   lastError = ''
   console.log('[Client][P] server room join requested.')
+}
+
+export function requestServerMatchSpectate(): void {
+  spectateRequested = true
+  spectateSent = false
+  status = isServerReadyForRequests() ? 'joining' : 'connecting'
+  lastError = ''
+  console.log('[Client][Spectator] watch request queued.')
 }
 
 export function requestServerRoomSnapshot(reason = 'ui-open'): void {
@@ -201,6 +245,7 @@ export function requestServerRoomLeave(reason = 'ui-leave'): void {
   const shouldNotifyServer = joinRequested
     || joinSent
     || snapshot.isLocalPlayerInRoom
+    || snapshot.isLocalSpectator
     || status === 'joined'
     || status === 'starting'
     || status === 'match-started'
@@ -208,6 +253,8 @@ export function requestServerRoomLeave(reason = 'ui-leave'): void {
 
   joinRequested = false
   joinSent = false
+  spectateRequested = false
+  spectateSent = false
   snapshotRequested = false
   snapshotPendingResponse = false
   snapshotRequestReason = 'ui-open'
@@ -219,6 +266,7 @@ export function requestServerRoomLeave(reason = 'ui-leave'): void {
   snapshot = createEmptyServerRoomSnapshot()
   status = 'left'
   lastError = ''
+  setServerSpectatorMode(false)
 
   if (shouldNotifyServer) {
     void getDogeRoom().send('leaveRoom', { reason })
@@ -236,17 +284,13 @@ export function requestServerRoomReady(isReady = true): void {
     console.log('[Client][P] setReady ignored not-in-room')
     return
   }
-  if (snapshot.localPlayerIsHost) {
-    console.log('[Client][P] setReady ignored host-is-implicit-ready')
-    return
-  }
-
+  primeGameAudioFromUserAction(isReady ? 'ready-up' : 'unready')
   void getDogeRoom().send('setReady', { isReady })
   requestServerRoomSnapshot('ready-refresh')
   console.log(`[Client][P] setReady sent ready=${isReady}`)
 }
 
-export function requestServerMatchStart(): void {
+export function requestServerMatchStart(mode: 'solo' | 'party'): void {
   if (status !== 'joined') {
     console.log(`[Client][Q] requestStartMatch ignored status=${status}`)
     return
@@ -259,8 +303,9 @@ export function requestServerMatchStart(): void {
   const requestId = `start-${nextStartRequestId++}`
   status = 'starting'
   lastError = ''
-  void getDogeRoom().send('requestStartMatch', { requestId })
-  console.log(`[Client][Q] requestStartMatch sent requestId=${requestId}`)
+  primeGameAudioFromUserAction(`start-${mode}`)
+  void getDogeRoom().send('requestStartMatch', { requestId, mode })
+  console.log(`[Client][Q] requestStartMatch sent requestId=${requestId} mode=${mode}`)
 }
 
 export function getServerRoomSnapshot(): ServerRoomSnapshot {
@@ -279,7 +324,9 @@ export function getServerRoomStatusLabel(): string {
   if (status === 'connecting') return getConnectingStatusLabel()
   if (status === 'joining') return 'Joining room'
   if (status === 'joined') return `Room ready v${snapshot.version}`
-  if (status === 'starting') return 'Starting match'
+  if (status === 'starting') return snapshot.startCountdownSeconds > 0
+    ? `Match starts in ${snapshot.startCountdownSeconds}s`
+    : 'Starting match'
   if (status === 'match-started') return 'Game in progress'
   if (status === 'error') return lastError || 'Server room error'
 
@@ -301,6 +348,15 @@ export function getLobbyRoomPrompt(): { statusLabel: string; actionLabel: string
   if (status === 'match-in-progress' || status === 'match-started' || snapshot.phase === 'active') {
     return {
       statusLabel: 'Game in progress',
+      actionLabel: snapshot.isLocalSpectator ? '' : 'Watch Game',
+    }
+  }
+
+  if (status === 'starting' || snapshot.phase === 'starting') {
+    return {
+      statusLabel: snapshot.startCountdownSeconds > 0
+        ? `Match starts in ${snapshot.startCountdownSeconds}s`
+        : 'Match starting',
       actionLabel: '',
     }
   }
@@ -395,6 +451,30 @@ function shouldAutoRefreshRoomSnapshot(): boolean {
   return true
 }
 
+function getLocalDisplayName(): string {
+  const profileName = (
+    getPlayer()?.name
+    ?? AvatarBase.getOrNull(engine.PlayerEntity)?.name
+    ?? ''
+  ).trim()
+  if (profileName && profileName.toLowerCase() !== 'you') {
+    return profileName.slice(0, 24)
+  }
+
+  return ''
+}
+
+function refreshLocalDisplayName(room: ReturnType<typeof getDogeRoom>): void {
+  if (!joinSent || !snapshot.isLocalPlayerInRoom) return
+
+  const displayName = getLocalDisplayName()
+  if (!displayName || displayName === lastSentDisplayName) return
+
+  lastSentDisplayName = displayName
+  void room.send('joinRoom', { displayName })
+  console.log(`[Client][P] joinRoom display name refreshed. displayName=${displayName}`)
+}
+
 function tickRoomHeartbeat(dt: number): void {
   if (!shouldSendRoomHeartbeat()) {
     roomHeartbeatElapsed = 0
@@ -409,7 +489,7 @@ function tickRoomHeartbeat(dt: number): void {
 }
 
 function shouldSendRoomHeartbeat(): boolean {
-  if (!snapshot.isLocalPlayerInRoom) return false
+  if (!snapshot.isLocalPlayerInRoom && !snapshot.isLocalSpectator) return false
   if (!isServerReadyForRequests()) return false
   if (status === 'idle' || status === 'room-available' || status === 'match-in-progress') return false
   if (status === 'connecting' || status === 'joining' || status === 'left' || status === 'error') return false

@@ -20,7 +20,7 @@ const ARENA_Y = 0
 const ARENA_Z = 48
 const ARENA_SCALE = 1.5
 const DESKTOP_ARENA_MODEL_SRC = 'models/MoonLobby1.glb'
-const MOBILE_ARENA_MODEL_SRC = 'models/MoonLobby1Mobile.glb'
+const MOBILE_ARENA_MODEL_SRC = 'models/MoonLobby1Mobile2.glb'
 
 function getArenaModelSrc(): string {
   return isMobile() ? MOBILE_ARENA_MODEL_SRC : DESKTOP_ARENA_MODEL_SRC

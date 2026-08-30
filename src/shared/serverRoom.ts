@@ -1,4 +1,4 @@
-export type ServerRoomPhase = 'empty' | 'waiting' | 'active' | 'settling'
+export type ServerRoomPhase = 'empty' | 'waiting' | 'starting' | 'active' | 'settling'
 
 export type ServerRoomPlayer = {
   id: string
@@ -9,20 +9,30 @@ export type ServerRoomPlayer = {
   isSimulated: boolean
 }
 
+export type ServerRoomSpectator = {
+  address: string
+  displayName: string
+}
+
 export type ServerRoomSnapshot = {
   roomId: string
   phase: ServerRoomPhase
   recipientAddress: string
   isLocalPlayerInRoom: boolean
+  isLocalSpectator: boolean
   localPlayerIsHost: boolean
   localPlayerIsReady: boolean
   players: ServerRoomPlayer[]
+  spectatorCount: number
+  maxSpectators: number
   playerCount: number
   maxPlayers: number
   simulatedPlayerCount: number
   hostAddress: string
   hostDisplayName: string
   canHostStart: boolean
+  canHostStartSolo: boolean
+  startCountdownSeconds: number
   canAddFakePlayer: boolean
   canRemoveFakePlayer: boolean
   settlingSecondsRemaining: number
@@ -30,7 +40,8 @@ export type ServerRoomSnapshot = {
 }
 
 export const SERVER_ROOM_ID = 'doge-server-room'
-export const SERVER_ROOM_MAX_PLAYERS = 4
+export const SERVER_ROOM_MAX_PLAYERS = 10
+export const SERVER_ROOM_MAX_SPECTATORS = 5
 
 export function createEmptyServerRoomSnapshot(): ServerRoomSnapshot {
   return {
@@ -38,15 +49,20 @@ export function createEmptyServerRoomSnapshot(): ServerRoomSnapshot {
     phase: 'empty',
     recipientAddress: '',
     isLocalPlayerInRoom: false,
+    isLocalSpectator: false,
     localPlayerIsHost: false,
     localPlayerIsReady: false,
     players: [],
+    spectatorCount: 0,
+    maxSpectators: SERVER_ROOM_MAX_SPECTATORS,
     playerCount: 0,
     maxPlayers: SERVER_ROOM_MAX_PLAYERS,
     simulatedPlayerCount: 0,
     hostAddress: '',
     hostDisplayName: '',
     canHostStart: false,
+    canHostStartSolo: false,
+    startCountdownSeconds: 0,
     canAddFakePlayer: false,
     canRemoveFakePlayer: false,
     settlingSecondsRemaining: 0,

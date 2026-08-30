@@ -13,6 +13,7 @@ import {
   ColliderLayer,
 } from '@dcl/sdk/ecs'
 import { Color4, Quaternion, Vector3 } from '@dcl/sdk/math'
+import { isMobile } from '@dcl/sdk/platform'
 
 import { LEADERBOARD_PAGE_SIZE } from '../shared/leaderboardConfig'
 import { Leaderboard } from '../shared/leaderboardSchemas'
@@ -45,6 +46,7 @@ const BOARD_HEIGHT = Math.max(2.35 * BOARD_SCALE, TITLE_BAND + ROWS_BAND + BOTTO
 const BOARD_TOP_Y = Math.max(2.35 * BOARD_SCALE, TITLE_BAND + ROWS_BAND + BOTTOM_PAD)
 const BOARD_CENTER_Y = BOARD_TOP_Y - BOARD_HEIGHT / 2
 const BOARD_BOTTOM_Y = BOARD_CENTER_Y - BOARD_HEIGHT / 2
+const RULES_HINT_Y = BOARD_BOTTOM_Y - (isMobile() ? 0.16 : 0.28) * BOARD_SCALE
 const TITLE_OFFSET_Y = BOARD_TOP_Y - BOARD_CENTER_Y - 0.28 * BOARD_SCALE
 const FIRST_ROW_OFFSET_Y = TITLE_OFFSET_Y - 0.6 * BOARD_SCALE
 const NAV_BUTTON_X = BOARD_WIDTH / 2 + 0.42 * BOARD_SCALE
@@ -59,6 +61,7 @@ const NAV_BUTTON_COLOR = Color4.create(1, 0.84, 0, 1)
 let boardStarted = false
 let boardRoot: Entity | null = null
 let boardPanelEntity: Entity | null = null
+let rulesHintButtonEntity: Entity | null = null
 let textFaceRoot: Entity | null = null
 let titleEntity: Entity | null = null
 let prevPageButton: Entity | null = null
@@ -97,12 +100,12 @@ export function setupLeaderboardBoard(): void {
       opts: {
         button: InputAction.IA_POINTER,
         hoverText: 'View ranking rules',
-        maxDistance: 12,
+        maxDistance: 16,
       },
     },
     () => {
       if (!boardVisible) return
-      openLeaderboardRulesPopup()
+      openLeaderboardRules('board')
     }
   )
 
@@ -152,7 +155,7 @@ export function setupLeaderboardBoard(): void {
     parent: boardRoot,
     position: Vector3.create(
       0,
-      BOARD_BOTTOM_Y - 0.28 * BOARD_SCALE,
+      RULES_HINT_Y,
       TEXT_FACE_OFFSET_Z
     ),
     rotation: TEXT_FACE_ROTATION,
@@ -166,6 +169,31 @@ export function setupLeaderboardBoard(): void {
     textAlign: TextAlignMode.TAM_MIDDLE_CENTER,
   })
   VisibilityComponent.create(rulesHintEntity, { visible: boardVisible })
+
+  rulesHintButtonEntity = engine.addEntity()
+  boardEntities.push(rulesHintButtonEntity)
+  Transform.create(rulesHintButtonEntity, {
+    parent: boardRoot,
+    position: Vector3.create(0, RULES_HINT_Y, TEXT_FACE_OFFSET_Z + 0.04),
+    rotation: TEXT_FACE_ROTATION,
+    scale: Vector3.create(BOARD_WIDTH * 0.92, 0.58 * BOARD_SCALE, 0.08),
+  })
+  MeshCollider.setBox(rulesHintButtonEntity, ColliderLayer.CL_POINTER)
+  VisibilityComponent.create(rulesHintButtonEntity, { visible: boardVisible })
+  pointerEventsSystem.onPointerDown(
+    {
+      entity: rulesHintButtonEntity,
+      opts: {
+        button: InputAction.IA_POINTER,
+        hoverText: 'View ranking rules',
+        maxDistance: 16,
+      },
+    },
+    () => {
+      if (!boardVisible) return
+      openLeaderboardRules('hint')
+    }
+  )
 
   for (let i = 0; i < VISIBLE_ROWS; i++) {
     const rowEntity = engine.addEntity()
@@ -219,6 +247,9 @@ export function setLeaderboardBoardVisible(visible: boolean): void {
 
   if (boardPanelEntity) {
     setPointerColliderEnabled(boardPanelEntity, visible)
+  }
+  if (rulesHintButtonEntity) {
+    setPointerColliderEnabled(rulesHintButtonEntity, visible)
   }
 
   renderLeaderboardPage()
@@ -306,6 +337,11 @@ function createBoardPanel(
 
 function createBoardBorderEntity(position: Vector3, scale: Vector3): Entity {
   return createBoardPanel(position, scale, BOARD_BORDER_COLOR, BOARD_BORDER_COLOR, 0.25)
+}
+
+function openLeaderboardRules(source: 'board' | 'hint'): void {
+  console.log(`[Client][LB] opening ranking rules source=${source}`)
+  openLeaderboardRulesPopup()
 }
 
 function setPointerColliderEnabled(entity: Entity, enabled: boolean): void {

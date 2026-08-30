@@ -1,11 +1,10 @@
 /**
  * skills.ts — Player skills
- * "Rock Solid": Press E or tap the HUD button to transform into a rock.
+ * "Rock Solid": tap the HUD button to transform into a rock.
  * Lasts 5 seconds, 15 second cooldown.
  */
 import {
-  engine, Entity, Transform, InputAction,
-  PointerEventType, inputSystem,
+  engine, Entity, Transform,
   GltfContainer,
   TextShape, Billboard, BillboardMode,
   VisibilityComponent,
@@ -120,9 +119,6 @@ export function skillSystem(dt: number): void {
     return
   }
 
-  if (inputSystem.isTriggered(InputAction.IA_PRIMARY, PointerEventType.PET_DOWN)) {
-    triggerTurnToRock()
-  }
 }
 
 export function triggerTurnToRock(): boolean {

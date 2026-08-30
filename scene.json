@@ -104,5 +104,6 @@
   "authoritativeMultiplayer": true,
   "logsPermissions": [
     "0x797066a17F83425C1B4C7a8Cca52D19095520a52"
-  ]
+  ],
+  "landscapeTerrain": true
 }

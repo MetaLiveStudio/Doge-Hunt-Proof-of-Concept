@@ -15,19 +15,43 @@ const MATCH_SPAWN_Y = 1.2
 
 export const MATCH_SPAWN_POINTS: PlayerSpawnPoint[] = [
   {
-    position: { x: 48, y: MATCH_SPAWN_Y, z: 40 },
+    position: { x: 48, y: MATCH_SPAWN_Y, z: 35 },
     cameraTarget: { x: 48, y: 1.6, z: 48 },
   },
   {
-    position: { x: 56, y: MATCH_SPAWN_Y, z: 48 },
+    position: { x: 55.6, y: MATCH_SPAWN_Y, z: 37.5 },
     cameraTarget: { x: 48, y: 1.6, z: 48 },
   },
   {
-    position: { x: 48, y: MATCH_SPAWN_Y, z: 56 },
+    position: { x: 60.4, y: MATCH_SPAWN_Y, z: 44 },
     cameraTarget: { x: 48, y: 1.6, z: 48 },
   },
   {
-    position: { x: 40, y: MATCH_SPAWN_Y, z: 48 },
+    position: { x: 60.4, y: MATCH_SPAWN_Y, z: 52 },
+    cameraTarget: { x: 48, y: 1.6, z: 48 },
+  },
+  {
+    position: { x: 55.6, y: MATCH_SPAWN_Y, z: 58.5 },
+    cameraTarget: { x: 48, y: 1.6, z: 48 },
+  },
+  {
+    position: { x: 48, y: MATCH_SPAWN_Y, z: 61 },
+    cameraTarget: { x: 48, y: 1.6, z: 48 },
+  },
+  {
+    position: { x: 40.4, y: MATCH_SPAWN_Y, z: 58.5 },
+    cameraTarget: { x: 48, y: 1.6, z: 48 },
+  },
+  {
+    position: { x: 35.6, y: MATCH_SPAWN_Y, z: 52 },
+    cameraTarget: { x: 48, y: 1.6, z: 48 },
+  },
+  {
+    position: { x: 35.6, y: MATCH_SPAWN_Y, z: 44 },
+    cameraTarget: { x: 48, y: 1.6, z: 48 },
+  },
+  {
+    position: { x: 40.4, y: MATCH_SPAWN_Y, z: 37.5 },
     cameraTarget: { x: 48, y: 1.6, z: 48 },
   },
 ]

@@ -5,13 +5,14 @@
   "private": true,
   "dependencies": {
     "@dcl-sdk/utils": "1.4.0",
-    "@dcl/js-runtime": "7.24.3-28199504206.commit-1a6c780",
-    "@dcl/sdk": "7.24.3-28199504206.commit-1a6c780"
+    "@dcl/js-runtime": "7.26.1-32239895147.commit-3c77d90",
+    "@dcl/sdk": "7.26.1-32239895147.commit-3c77d90"
   },
   "devDependencies": {
-    "@dcl/sdk-commands": "7.24.3-28199504206.commit-1a6c780"
+    "@dcl/sdk-commands": "7.26.1-32239895147.commit-3c77d90"
   },
   "scripts": {
+    "postinstall": "node scripts/patch-hammurabi-runtime.cjs",
     "start": "sdk-commands start",
     "build": "sdk-commands build",
     "deploy": "sdk-commands deploy",

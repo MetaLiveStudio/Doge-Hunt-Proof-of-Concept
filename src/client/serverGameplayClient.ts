@@ -1,8 +1,10 @@
 import { engine, Transform } from '@dcl/sdk/ecs'
 import { Vector3 } from '@dcl/sdk/math'
+import { isMobile } from '@dcl/sdk/platform'
 
 import { applyServerBonkAccepted } from '../combat'
 import { playBonkHitSound, playBonkMissSound } from './gameAudio'
+import { showBonkAcceptedFeedback } from './gameplayFeedback'
 import { setGameplayResolvers } from '../gameResolvers'
 import type {
   BonkActionStartRequest,
@@ -15,12 +17,13 @@ import type {
 } from '../gameResolvers'
 import { recordLocalRoundEnded } from '../localMatchState'
 import type { LocalRoundEndReason } from '../localMatchState'
-import { getAliveNpcPublicDogeIds } from '../npc'
 import { applyServerTurnToRockActivated } from '../skills'
 import { getDogeRoom } from '../shared/messages'
 import {
   parseServerDebugForceRoundEndResultPayload,
+  parseServerDebugEliminateAllResultPayload,
   parseServerDebugMarkOutResultPayload,
+  parseServerDebugNpcFreezeResultPayload,
   parseServerBonkActionEventPayload,
   parseServerBonkResultPayload,
   parseServerRoundEndResultPayload,
@@ -28,8 +31,11 @@ import {
   type SerializableVector3,
   type ServerBonkActionRequestPayload,
   type ServerBonkRequestPayload,
+  type ServerBonkResultPayload,
   type ServerDebugForceRoundEndRequestPayload,
+  type ServerDebugEliminateAllRequestPayload,
   type ServerDebugMarkOutRequestPayload,
+  type ServerDebugNpcFreezeRequestPayload,
   type ServerRoundEndRequestPayload,
   type ServerTurnToRockRequestPayload,
 } from '../shared/serverGameplay'
@@ -40,6 +46,7 @@ import {
   getServerPublicMatchSnapshot,
 } from './serverPublicStateClient'
 import { playRemotePlayerBonkAction } from './remotePlayerProxies'
+import { areServerNpcsFrozen, setServerNpcsFrozen } from './serverNpcFreezeState'
 
 let serverGameplayClientStarted = false
 let nextBonkActionRequestId = 1
@@ -47,7 +54,9 @@ let nextBonkRequestId = 1
 let nextTurnToRockRequestId = 1
 let nextRoundEndRequestId = 1
 let nextDebugMarkOutRequestId = 1
+let nextDebugEliminateAllRequestId = 1
 let nextDebugForceRoundEndRequestId = 1
+let nextDebugNpcFreezeRequestId = 1
 let pendingTurnToRockRequestId = ''
 
 const LOCAL_PLAYER_ID = 'local-player'
@@ -82,8 +91,11 @@ export function setupServerGameplayClient(): void {
 
     if (payload.outcome === 'accepted') {
       playBonkHitSound()
+      const targetPlayer = getServerPublicMatchSnapshot(payload.matchId)
+        ?.players.find((player) => player.publicDogeId === payload.targetPublicDogeId)
+      showBonkAcceptedFeedback(targetPlayer?.displayName ?? '')
       const applied = applyServerBonkAccepted(payload.targetPublicDogeId, toVector3(payload.origin))
-      console.log(`[Client][S] bonkResult accepted requestId=${payload.requestId} target=${payload.targetPublicDogeId} applied=${applied} targetAlive=${payload.targetDogesAlive}/${payload.targetDogesTotal}`)
+    console.log(`[Client][S] bonkResult accepted requestId=${payload.requestId} target=${payload.targetPublicDogeId} applied=${applied} targetAlive=${payload.targetDogesAlive}/${payload.targetDogesTotal} ${formatServerBonkEnvelope(payload)}`)
       return
     }
 
@@ -91,7 +103,7 @@ export function setupServerGameplayClient(): void {
       playBonkMissSound()
     }
 
-    console.log(`[Client][S] bonkResult rejected requestId=${payload.requestId} reason=${payload.reason} target=${payload.targetPublicDogeId}`)
+    console.log(`[Client][S] bonkResult rejected requestId=${payload.requestId} reason=${payload.reason} target=${payload.targetPublicDogeId} ${formatServerBonkEnvelope(payload)}`)
   })
 
   room.onMessage('turnToRockResult', (data) => {
@@ -153,6 +165,16 @@ export function setupServerGameplayClient(): void {
     console.log(`[Client][T] debugMarkOutResult ${payload.outcome} requestId=${payload.requestId} status=${payload.status} publicDoge=${payload.publicDogeId || 'none'} reason=${payload.reason || 'none'}`)
   })
 
+  room.onMessage('debugEliminateAllResult', (data) => {
+    const payload = parseServerDebugEliminateAllResultPayload(data.payloadJson)
+    if (!payload) {
+      console.log('[Client][Admin] debugEliminateAllResult ignored invalid payload.')
+      return
+    }
+
+    console.log(`[Client][Admin] debugEliminateAllResult ${payload.outcome} requestId=${payload.requestId} eliminated=${payload.eliminatedCount} roundOver=${payload.roundOver} reason=${payload.reason || 'none'}`)
+  })
+
   room.onMessage('debugForceRoundEndResult', (data) => {
     const payload = parseServerDebugForceRoundEndResultPayload(data.payloadJson)
     if (!payload) {
@@ -161,6 +183,17 @@ export function setupServerGameplayClient(): void {
     }
 
     console.log(`[Client][T] debugForceRoundEndResult ${payload.outcome} requestId=${payload.requestId} roundOver=${payload.roundOver} reason=${payload.reason || 'none'}`)
+  })
+
+  room.onMessage('debugNpcFreezeResult', (data) => {
+    const payload = parseServerDebugNpcFreezeResultPayload(data.payloadJson)
+    if (!payload) {
+      console.log('[Client][Admin] debugNpcFreezeResult ignored invalid payload.')
+      return
+    }
+
+    setServerNpcsFrozen(payload.isFrozen)
+    console.log(`[Client][Admin] debugNpcFreezeResult ${payload.outcome} requestId=${payload.requestId} frozen=${payload.isFrozen} reason=${payload.reason || 'none'}`)
   })
 
   setGameplayResolvers({
@@ -198,6 +231,7 @@ function notifyServerBonkActionStart(request: BonkActionStartRequest): void {
 function resolveServerBonk(request: BonkRequest): BonkResult {
   const snapshot = getServerPublicMatchSnapshot()
   const targetPublicDogeId = request.candidatePublicDogeId ?? ''
+  const aimedPlayerPublicDogeId = request.aimedPlayerPublicDogeId ?? ''
 
   if (!canLocalServerPlayerAct()) {
     console.log(`[Client][T] bonk ignored localStatus=${getLocalServerPlayerStatus()}`)
@@ -214,7 +248,14 @@ function resolveServerBonk(request: BonkRequest): BonkResult {
     }
   }
 
-  const requestId = sendServerBonkRequest(snapshot.matchId, targetPublicDogeId, fromVector3(request.origin))
+  const requestId = sendServerBonkRequest(
+    snapshot.matchId,
+    targetPublicDogeId,
+    aimedPlayerPublicDogeId,
+    fromVector3(request.origin),
+    getYawFromForward(request.forward),
+    getYawFromForward(request.aimForward ?? request.forward)
+  )
 
   return {
     outcome: 'pending',
@@ -230,18 +271,37 @@ export function requestServerDebugEliminateAllDoges(): void {
     return
   }
 
-  const targetPublicDogeIds = getAliveNpcPublicDogeIds()
-  if (targetPublicDogeIds.length === 0) {
-    console.log('[Client][S][RoundEnd] debug eliminate all ignored: no alive local NPC public Doges.')
+  const requestId = `debug-clear-${nextDebugEliminateAllRequestId++}`
+  const payload: ServerDebugEliminateAllRequestPayload = {
+    requestId,
+    matchId: snapshot.matchId,
+    reason: 'debug-eliminate-all',
+  }
+
+  void getDogeRoom().send('debugEliminateAllRequest', {
+    payloadJson: JSON.stringify(payload),
+  })
+  console.log(`[Client][Admin] debug eliminate all requested requestId=${requestId} matchId=${snapshot.matchId}`)
+}
+
+export function requestServerDebugToggleNpcFreeze(): void {
+  const snapshot = getServerPublicMatchSnapshot()
+  if (!snapshot) {
+    console.log('[Client][Admin] debug NPC freeze ignored: missing server public snapshot.')
     return
   }
 
-  const origin = getPlayerOrigin()
-  console.log(`[Client][S][RoundEnd] debug eliminate all requested targets=${targetPublicDogeIds.length} matchId=${snapshot.matchId}`)
-
-  for (const targetPublicDogeId of targetPublicDogeIds) {
-    sendServerBonkRequest(snapshot.matchId, targetPublicDogeId, origin, 'debug-round-end')
+  const requestId = `debug-npc-freeze-${nextDebugNpcFreezeRequestId++}`
+  const payload: ServerDebugNpcFreezeRequestPayload = {
+    requestId,
+    matchId: snapshot.matchId,
+    reason: 'debug-toggle-npc-freeze',
   }
+
+  void getDogeRoom().send('debugNpcFreezeRequest', {
+    payloadJson: JSON.stringify(payload),
+  })
+  console.log(`[Client][Admin] debug NPC freeze requested requestId=${requestId} matchId=${snapshot.matchId} currentFrozen=${areServerNpcsFrozen()}`)
 }
 
 export function requestServerDebugMarkLocalOut(): void {
@@ -388,21 +448,30 @@ function fromVector3(vector: { x: number; y: number; z: number }): SerializableV
 function sendServerBonkRequest(
   matchId: string,
   targetPublicDogeId: string,
+  aimedPlayerPublicDogeId: string,
   origin: SerializableVector3,
-  source = 'attack'
+  yawDegrees: number,
+  aimYawDegrees: number,
+  source: ServerBonkRequestPayload['source'] = 'attack'
 ): string {
   const requestId = `bonk-${nextBonkRequestId++}`
+  const platform = isMobile() ? 'mobile' : 'desktop'
   const payload: ServerBonkRequestPayload = {
     requestId,
     matchId,
     targetPublicDogeId,
+    aimedPlayerPublicDogeId,
     origin,
+    yawDegrees,
+    aimYawDegrees,
+    platform,
+    source,
   }
 
   void getDogeRoom().send('bonkRequest', {
     payloadJson: JSON.stringify(payload),
   })
-  console.log(`[Client][S] bonkRequest sent requestId=${requestId} matchId=${matchId} target=${targetPublicDogeId} source=${source}`)
+  console.log(`[Client][RayBonk] request sent requestId=${requestId} matchId=${matchId} npcTarget=${targetPublicDogeId || 'none'} aimedPlayer=${aimedPlayerPublicDogeId || 'none'} source=${source} platform=${platform} yaw=${formatClientNumber(yawDegrees)} aimYaw=${formatClientNumber(aimYawDegrees)}`)
 
   return requestId
 }
@@ -414,6 +483,19 @@ function getPlayerOrigin(): SerializableVector3 {
   }
 
   return fromVector3(playerTransform.position)
+}
+
+function formatServerBonkEnvelope(payload: ServerBonkResultPayload): string {
+  if (payload.serverPlatform === undefined || payload.validatedRange === undefined || payload.validatedRadius === undefined) {
+    return 'serverEnvelope=unavailable'
+  }
+
+  return `serverPlatform=${payload.serverPlatform} serverRange=${formatClientNumber(payload.validatedRange)} serverRadius=${formatClientNumber(payload.validatedRadius)}`
+}
+
+function getPlayerYawDegrees(): number {
+  const playerTransform = Transform.getOrNull(engine.PlayerEntity)
+  return playerTransform ? getYawFromRotation(playerTransform.rotation) : 0
 }
 
 function toVector3(vector: SerializableVector3): Vector3 {

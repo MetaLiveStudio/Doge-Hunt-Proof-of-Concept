@@ -31,6 +31,7 @@ import {
   getLocalServerPlayerStatus,
 } from './client/serverPublicStateClient'
 import { playBonkHitSound, playBonkMissSound } from './client/gameAudio'
+import { capturePlayerBonkAim, updatePlayerBonkTargeting, type PlayerBonkAim } from './client/playerBonkTargeting'
 
 const KILL_MESSAGES = [
   'Such eliminate. Very dead. Wow.',
@@ -48,14 +49,16 @@ const KILL_MESSAGES = [
 export let totalBonks = 0
 
 const ATTACK_MIN_FORWARD = 0.15
-const ATTACK_RANGE = 3.6
-const ATTACK_RADIUS = 2.45
+const ATTACK_RANGE = 3.95
+const ATTACK_RADIUS = 2.7
+const MOBILE_ATTACK_HIT_SCALE = 0.70
 const ATTACK_HIT_WINDOW_SECONDS = 0.16
 const COMBAT_START_INPUT_GRACE_SECONDS = 0.2
 
 let attackElapsed = PLAYER_ATTACK_TOTAL_DURATION
 let hasHitThisSwing = false
 let startInputGraceTimer = 0
+let pendingPlayerAim: PlayerBonkAim | null = null
 
 const LOCAL_PLAYER_ID = 'local-player'
 
@@ -64,6 +67,7 @@ export function resetCombat(): void {
   totalBonks = 0
   attackElapsed = PLAYER_ATTACK_TOTAL_DURATION
   hasHitThisSwing = false
+  pendingPlayerAim = null
   startInputGraceTimer = COMBAT_START_INPUT_GRACE_SECONDS
 }
 
@@ -76,8 +80,16 @@ export function triggerPlayerBonkAttack(): boolean {
 
   attackElapsed = 0
   hasHitThisSwing = false
-
   const attackPose = tryGetAttackPose()
+  const attackEnvelope = getAttackHitEnvelope()
+  pendingPlayerAim = capturePlayerBonkAim(attackPose ? {
+    origin: attackPose.origin,
+    forward: attackPose.forward,
+    minForward: ATTACK_MIN_FORWARD,
+    range: attackEnvelope.range,
+    radius: attackEnvelope.radius,
+  } : null)
+
   if (attackPose) {
     notifyBonkActionStart({
       attackerPlayerId: LOCAL_PLAYER_ID,
@@ -87,6 +99,7 @@ export function triggerPlayerBonkAttack(): boolean {
   }
 
   playPlayerAttackAnimation()
+  console.log(`[Client][RayBonk] swing platform=${isMobile() ? 'mobile' : 'desktop'} aimed=${pendingPlayerAim?.publicDogeId ?? 'none'} source=${pendingPlayerAim?.source ?? 'none'} targetDistance=${pendingPlayerAim ? pendingPlayerAim.rayLength.toFixed(2) : 'n/a'}`)
   return true
 }
 
@@ -182,6 +195,7 @@ export function applyServerBonkAccepted(publicDogeId: string, hitOrigin: Vector3
 function findBestNpcInFront(origin: Vector3, forward: Vector3): Entity | null {
   let bestTarget: Entity | null = null
   let bestDistance = Number.POSITIVE_INFINITY
+  const attackEnvelope = getAttackHitEnvelope()
 
   for (const [entity] of engine.getEntitiesWith(NpcPatrol, Transform)) {
     const patrol = NpcPatrol.get(entity)
@@ -192,12 +206,12 @@ function findBestNpcInFront(origin: Vector3, forward: Vector3): Entity | null {
     const flatToNpc = Vector3.create(toNpc.x, 0, toNpc.z)
 
     const forwardDistance = Vector3.dot(flatToNpc, forward)
-    if (forwardDistance < ATTACK_MIN_FORWARD || forwardDistance > ATTACK_RANGE) continue
+    if (forwardDistance < ATTACK_MIN_FORWARD || forwardDistance > attackEnvelope.range) continue
 
     const projected = Vector3.scale(forward, forwardDistance)
     const lateralOffset = Vector3.subtract(flatToNpc, projected)
     const lateralDistance = Vector3.length(lateralOffset)
-    if (lateralDistance > ATTACK_RADIUS) continue
+    if (lateralDistance > attackEnvelope.radius) continue
 
     const planarDistance = Vector3.length(flatToNpc)
     if (planarDistance < bestDistance) {
@@ -209,16 +223,26 @@ function findBestNpcInFront(origin: Vector3, forward: Vector3): Entity | null {
   return bestTarget
 }
 
+function getAttackHitEnvelope(): { range: number; radius: number } {
+  const scale = isMobile() ? MOBILE_ATTACK_HIT_SCALE : 1
+  return {
+    range: ATTACK_RANGE * scale,
+    radius: ATTACK_RADIUS * scale,
+  }
+}
+
 /** Combat system — tap anywhere to swing, hit only when an NPC is inside the attack zone */
 export function combatSystem(dt: number): void {
+  updatePlayerBonkTargeting()
+
   if (startInputGraceTimer > 0) {
     startInputGraceTimer = Math.max(0, startInputGraceTimer - dt)
     return
   }
 
-  // Mobile Explorer owns the native finger button. Keep it from triggering a
-  // duplicate BONK while the scene's dedicated Bonk image button is in use.
-  if (!isMobile() && inputSystem.isTriggered(InputAction.IA_POINTER, PointerEventType.PET_DOWN)) {
+  const desktopBonkPressed = !isMobile()
+    && inputSystem.isTriggered(InputAction.IA_POINTER, PointerEventType.PET_DOWN)
+  if (desktopBonkPressed) {
     triggerPlayerBonkAttack()
   }
 
@@ -236,6 +260,8 @@ export function combatSystem(dt: number): void {
   const candidatePublicDogeId = candidateTargetNpc
     ? getNpcPublicDogeId(candidateTargetNpc) ?? ''
     : ''
+  const aimedPlayerPublicDogeId = pendingPlayerAim?.publicDogeId ?? ''
+  const aimForward = pendingPlayerAim?.forward
 
   const bonkResult = requestBonk({
     attackerPlayerId: LOCAL_PLAYER_ID,
@@ -243,7 +269,11 @@ export function combatSystem(dt: number): void {
     forward: attackPose.forward,
     candidatePublicDogeId,
     candidateTargetNpc: candidateTargetNpc ?? undefined,
+    aimedPlayerPublicDogeId,
+    aimForward,
   })
+
+  pendingPlayerAim = null
 
   if (applyBonkResult(bonkResult)) {
     hasHitThisSwing = true

@@ -1,4 +1,4 @@
-import { Entity, engine } from '@dcl/sdk/ecs'
+import { Entity, engine, executeTask } from '@dcl/sdk/ecs'
 import { syncEntity } from '@dcl/sdk/network'
 import { Storage } from '@dcl/sdk/server'
 
@@ -35,6 +35,14 @@ type WeeklyLeaderboardStorage = {
   entries: [string, PlayerRecord][]
 }
 
+type DecentralandProfile = {
+  userId?: string
+  publicKey?: string
+  name?: string
+  displayName?: string
+  avatars?: DecentralandProfile[]
+}
+
 type MatchAwardContext = {
   matchId: string
   playerCount: number
@@ -55,6 +63,7 @@ export type PublicLeaderboardSnapshot = {
 const scores = new Map<string, PlayerRecord>()
 const awardedMatchIds = new Set<string>()
 const pendingAwardMatchIds = new Set<string>()
+const DECENTRALAND_PROFILES_URL = 'https://peer.decentraland.org/lambdas/profiles'
 
 let leaderboardEntity: Entity | null = null
 let leaderboardReady: Promise<void> | null = null
@@ -62,6 +71,7 @@ let leaderboardWeekStartUtc = getLeaderboardWeekStartUtc()
 let rolloverCheckAccumulator = 0
 let rolloverCheckStarted = false
 let rolloverPromise: Promise<void> | null = null
+let legacyProfileRefreshStarted = false
 
 export function setupLeaderboardServer(): Promise<void> {
   if (leaderboardReady) return leaderboardReady
@@ -74,6 +84,7 @@ export function setupLeaderboardServer(): Promise<void> {
   leaderboardReady = loadFromStorage().then(() => {
     publishLeaderboard()
     console.log(`[Server][LB] Ready. Week=${leaderboardWeekStartUtc} restored ${scores.size} player record(s) from Storage.`)
+    startLegacyProfileNameRefresh()
   })
 
   return leaderboardReady
@@ -106,6 +117,25 @@ export async function getLeaderboardExportSnapshot(): Promise<PublicLeaderboardS
     scores: ranked.map(([, record]) => record.totalScore),
     updatedAt: leaderboardEntity ? Number(Leaderboard.get(leaderboardEntity).updatedAt) : Date.now(),
   }
+}
+
+export function refreshLeaderboardPlayerName(address: string, displayName: string): void {
+  const normalizedName = displayName.trim().slice(0, 24)
+  if (!normalizedName || normalizedName.toLowerCase() === 'you' || normalizedName.toLowerCase() === 'player') return
+
+  void setupLeaderboardServer().then(() => {
+    const record = scores.get(normalizeAddress(address))
+    if (!record || record.name === normalizedName) return
+
+    record.name = normalizedName
+    publishLeaderboard()
+    void persistToStorage().catch((error) => {
+      console.log(`[Server][LB] Could not persist display name for ${shortAddress(address)}:`, error)
+    })
+    console.log(`[Server][LB] display name refreshed address=${shortAddress(address)} name=${normalizedName}`)
+  }).catch((error) => {
+    console.log(`[Server][LB] Could not refresh display name for ${shortAddress(address)}:`, error)
+  })
 }
 
 export async function awardMatchLeaderboardPoints(context: MatchAwardContext): Promise<boolean> {
@@ -198,6 +228,67 @@ async function rolloverLeaderboard(nextWeekStartUtc: string): Promise<void> {
 
 function normalizeAddress(address: string): string {
   return address.toLowerCase()
+}
+
+function isPlaceholderDisplayName(name: string): boolean {
+  const normalizedName = name.trim().toLowerCase()
+  return normalizedName === ''
+    || normalizedName === 'you'
+    || normalizedName === 'player'
+    || /^player [0-9a-f]{6}$/.test(normalizedName)
+}
+
+function startLegacyProfileNameRefresh(): void {
+  if (legacyProfileRefreshStarted) return
+  legacyProfileRefreshStarted = true
+
+  const addresses = [...scores.entries()]
+    .filter(([, record]) => isPlaceholderDisplayName(record.name))
+    .map(([address]) => address)
+
+  if (addresses.length === 0) return
+
+  executeTask(async () => {
+    try {
+      const response = await fetch(DECENTRALAND_PROFILES_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ids: addresses }),
+      })
+
+      if (!response.ok) {
+        throw new Error(`Profile API returned ${response.status}`)
+      }
+
+      const payload = await response.json() as unknown
+      const profiles = Array.isArray(payload) ? payload as DecentralandProfile[] : []
+      let updatedNames = 0
+
+      for (const profile of profiles) {
+        const candidates = Array.isArray(profile.avatars) ? profile.avatars : [profile]
+        for (const candidate of candidates) {
+          const address = normalizeAddress(candidate.userId ?? candidate.publicKey ?? profile.userId ?? profile.publicKey ?? '')
+          const displayName = (candidate.name ?? candidate.displayName ?? profile.name ?? profile.displayName ?? '').trim().slice(0, 24)
+          const record = scores.get(address)
+          if (!record || !displayName || isPlaceholderDisplayName(displayName) || !isPlaceholderDisplayName(record.name)) continue
+
+          record.name = displayName
+          updatedNames += 1
+        }
+      }
+
+      if (updatedNames === 0) {
+        console.log(`[Server][LB] Profile refresh returned no usable names for ${addresses.length} legacy record(s).`)
+        return
+      }
+
+      publishLeaderboard()
+      await persistToStorage()
+      console.log(`[Server][LB] Restored ${updatedNames} legacy leaderboard name(s) from Decentraland profiles.`)
+    } catch (error) {
+      console.log('[Server][LB] Decentraland profile refresh failed; room startup is unaffected:', error)
+    }
+  })
 }
 
 async function loadDailyRecord(address: string): Promise<DailyRecord> {
@@ -370,7 +461,7 @@ async function loadFromStorage(): Promise<void> {
 
   for (const [address, record] of stored.entries) {
     scores.set(normalizeAddress(address), {
-      name: record.name || 'Player',
+      name: record.name?.trim().slice(0, 24) || 'Player',
       totalScore: typeof record.totalScore === 'number' ? record.totalScore : 0,
     })
   }

@@ -5,6 +5,11 @@ export const SERVER_ROUND_DURATION_SECONDS = 180
 
 export type ServerPlayerStatus = 'active' | 'out' | 'spectator'
 
+export type ServerPublicPlayerPose = {
+  position: { x: number; y: number; z: number }
+  rotation: { x: number; y: number; z: number; w: number }
+}
+
 export type ServerPublicPlayerState = {
   playerId: string
   displayName: string
@@ -14,6 +19,8 @@ export type ServerPublicPlayerState = {
   isAlive: boolean
   status: ServerPlayerStatus
   bonks: number
+  eliminatedByDisplayName?: string
+  pose?: ServerPublicPlayerPose
   eliminationOrder?: number
   eliminatedAtSeconds?: number
 }
@@ -129,12 +136,32 @@ function normalizeServerPublicPlayers(players: unknown[]): ServerPublicPlayerSta
       isAlive: entry.isAlive,
       status,
       bonks: entry.bonks,
+      eliminatedByDisplayName: typeof entry.eliminatedByDisplayName === 'string'
+        ? entry.eliminatedByDisplayName
+        : '',
+      pose: parseServerPublicPlayerPose(entry.pose),
       eliminationOrder: typeof entry.eliminationOrder === 'number' ? entry.eliminationOrder : 0,
       eliminatedAtSeconds: typeof entry.eliminatedAtSeconds === 'number' ? entry.eliminatedAtSeconds : 0,
     })
   }
 
   return normalized
+}
+
+function parseServerPublicPlayerPose(value: unknown): ServerPublicPlayerPose | undefined {
+  if (!isRecord(value) || !isRecord(value.position) || !isRecord(value.rotation)) return undefined
+
+  const { position, rotation } = value
+  if (
+    typeof position.x !== 'number' || typeof position.y !== 'number' || typeof position.z !== 'number' ||
+    typeof rotation.x !== 'number' || typeof rotation.y !== 'number' ||
+    typeof rotation.z !== 'number' || typeof rotation.w !== 'number'
+  ) return undefined
+
+  return {
+    position: { x: position.x, y: position.y, z: position.z },
+    rotation: { x: rotation.x, y: rotation.y, z: rotation.z, w: rotation.w },
+  }
 }
 
 function isServerPlayerStatus(status: unknown): status is ServerPlayerStatus {

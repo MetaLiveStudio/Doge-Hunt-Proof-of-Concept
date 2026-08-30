@@ -6,15 +6,17 @@ import { getDogeRoom } from '../shared/messages'
 import {
   SERVER_ROOM_ID,
   SERVER_ROOM_MAX_PLAYERS,
+  SERVER_ROOM_MAX_SPECTATORS,
   type ServerRoomPlayer,
+  type ServerRoomSpectator,
   type ServerRoomSnapshot,
 } from '../shared/serverRoom'
 import {
   createPresentationDogeIdentities,
   createPrivatePlayerSeed,
   createServerPublicDoges,
+  getServerTotalDoges,
   LOCAL_RUNTIME_PLAYER_ID,
-  SERVER_TOTAL_DOGES,
   type ServerMatchStartPayload,
 } from '../shared/serverMatch'
 import {
@@ -22,15 +24,20 @@ import {
   SERVER_TURN_TO_ROCK_DURATION_SECONDS,
   parseServerBonkActionRequestPayload,
   parseServerBonkRequestPayload,
+  parseServerDebugEliminateAllRequestPayload,
   parseServerDebugForceRoundEndRequestPayload,
   parseServerDebugMarkOutRequestPayload,
+  parseServerDebugNpcFreezeRequestPayload,
   parseServerRoundEndRequestPayload,
   parseServerTurnToRockRequestPayload,
   type ServerBonkActionEventPayload,
   type ServerBonkRejectReason,
+  type ServerBonkRequestPlatform,
   type ServerBonkResultPayload,
+  type ServerDebugEliminateAllResultPayload,
   type ServerDebugForceRoundEndResultPayload,
   type ServerDebugMarkOutResultPayload,
+  type ServerDebugNpcFreezeResultPayload,
   type ServerRoundEndRejectReason,
   type ServerRoundEndResultPayload,
   type ServerTurnToRockRejectReason,
@@ -41,16 +48,20 @@ import {
   countAlivePublicDoges,
   countAliveTargetDoges,
   type ServerPublicMatchSnapshot,
+  type ServerPublicPlayerPose,
   type ServerPublicPlayerState,
 } from '../shared/serverPublicState'
-import { createServerNpcSnapshot } from '../shared/serverNpcSnapshot'
+import { createServerNpcSnapshot, getServerNpcTransform } from '../shared/serverNpcSnapshot'
 import { getMatchSpawnPoint } from '../shared/playerSpawns'
+import { isDogeHuntAdmin } from '../shared/leaderboardConfig'
+import { rankServerPlayers } from '../shared/leaderboardRanking'
 import type { LocalRoundEndReason, PublicDogeState } from '../localMatchState'
 import type { LocalMatchConfig, LocalMatchPlayerSlot } from '../localMatch'
 import {
   awardMatchLeaderboardPoints,
   getLeaderboardExportSnapshot,
   getPublicLeaderboardSnapshot,
+  refreshLeaderboardPlayerName,
   setupLeaderboardServer,
 } from './leaderboard'
 
@@ -65,7 +76,11 @@ type ActiveServerMatch = {
   publicPlayers: ServerPublicPlayerState[]
   playerSkills: ServerPlayerSkillState[]
   elapsedSeconds: number
+  npcsFrozen: boolean
+  npcFrozenElapsedSeconds: number
   tickAccumulator: number
+  poseTickAccumulator: number
+  heartbeatFinalSurvivorCheckSeconds: number
   endReason: LocalRoundEndReason | null
   winnerAddress: string
   winnerDisplayName: string
@@ -91,10 +106,7 @@ type ServerAttackPose = {
   forward: Vector3
 }
 
-type ServerPlayerTransform = {
-  position: { x: number; y: number; z: number }
-  rotation: { x: number; y: number; z: number; w: number }
-}
+type ServerPlayerTransform = ServerPublicPlayerPose
 
 type ServerPlayerBonkMeasurement = {
   transformFound: boolean
@@ -104,24 +116,39 @@ type ServerPlayerBonkMeasurement = {
   inArc: boolean
 }
 
-type ServerPlayerBonkCandidate = {
-  player: ServerPublicPlayerState
-  publicDoge: PublicDogeState
-  measurement: ServerPlayerBonkMeasurement
+type ServerBonkHitEnvelope = {
+  minForward: number
+  range: number
+  radius: number
+}
+
+type PendingMatchStart = {
+  requestedBy: string
+  requestId: string
+  mode: 'solo' | 'party'
+  countdownSeconds: number
+  lastBroadcastSeconds: number
 }
 
 const SERVER_BONK_MIN_FORWARD = 0.15
-const SERVER_BONK_RANGE = 3.6
-const SERVER_BONK_RADIUS = 2.45
+const SERVER_BONK_RANGE = 3.95
+const SERVER_BONK_RADIUS = 2.7
+const SERVER_MOBILE_BONK_HIT_SCALE = 0.70
+const SERVER_BONK_CLIENT_ORIGIN_TOLERANCE = 2.25
+const SERVER_BONK_CLIENT_YAW_AUDIT_DEGREES = 70
+const SERVER_NPC_HIT_LAG_COMPENSATION_SECONDS = 0.3
 const SERVER_ROOM_HEARTBEAT_TIMEOUT_SECONDS = 12
 const SERVER_ROOM_PRUNE_INTERVAL_SECONDS = 2
 const SERVER_ROOM_SETTLING_TIMEOUT_SECONDS = 30
-const LEADERBOARD_EXPORT_ADMIN_ADDRESS = '0x797066a17f83425c1b4c7a8cca52d19095520a52'
-
+const SERVER_PLAYER_POSE_BROADCAST_INTERVAL_SECONDS = 0.2
+const SERVER_MATCH_START_COUNTDOWN_SECONDS = 3
+const SERVER_HEARTBEAT_FINAL_SURVIVOR_GRACE_SECONDS = 4
+const SERVER_RECENT_HEARTBEAT_SECONDS = 5
 let serverLobbyStarted = false
 let roomMaintenanceSystemStarted = false
 let publicStateSystemStarted = false
 let players: ServerRoomPlayer[] = []
+let spectators: ServerRoomSpectator[] = []
 let playerLastSeenSeconds = new Map<string, number>()
 let roomElapsedSeconds = 0
 let roomPruneAccumulator = 0
@@ -129,6 +156,16 @@ let roomVersion = 0
 let matchVersion = 0
 let nextMatchId = 1
 let activeMatch: ActiveServerMatch | null = null
+let pendingMatchStart: PendingMatchStart | null = null
+
+function getServerBonkHitEnvelope(platform: ServerBonkRequestPlatform): ServerBonkHitEnvelope {
+  const scale = platform === 'mobile' ? SERVER_MOBILE_BONK_HIT_SCALE : 1
+  return {
+    minForward: SERVER_BONK_MIN_FORWARD,
+    range: SERVER_BONK_RANGE * scale,
+    radius: SERVER_BONK_RADIUS * scale,
+  }
+}
 
 export function setupServerLobby(): void {
   if (serverLobbyStarted) return
@@ -144,6 +181,12 @@ export function setupServerLobby(): void {
     if (!context) return
 
     handleJoinRoom(context, data.displayName)
+  })
+
+  room.onMessage('spectateMatch', (data, context) => {
+    if (!context) return
+
+    handleSpectateMatch(context, data.displayName)
   })
 
   room.onMessage('leaveRoom', (data, context) => {
@@ -185,7 +228,7 @@ export function setupServerLobby(): void {
   room.onMessage('requestStartMatch', (data, context) => {
     if (!context) return
 
-    handleRequestStartMatch(context, data.requestId)
+    handleRequestStartMatch(context, data.requestId, data.mode)
   })
 
   room.onMessage('bonkRequest', (data, context) => {
@@ -218,29 +261,48 @@ export function setupServerLobby(): void {
     handleDebugMarkOutRequest(context, data.payloadJson)
   })
 
+  room.onMessage('debugEliminateAllRequest', (data, context) => {
+    if (!context) return
+
+    handleDebugEliminateAllRequest(context, data.payloadJson)
+  })
+
   room.onMessage('debugForceRoundEndRequest', (data, context) => {
     if (!context) return
 
     handleDebugForceRoundEndRequest(context, data.payloadJson)
   })
 
+  room.onMessage('debugNpcFreezeRequest', (data, context) => {
+    if (!context) return
+
+    handleDebugNpcFreezeRequest(context, data.payloadJson)
+  })
+
   setupServerRoomMaintenanceSystem()
   setupServerPublicStateSystem()
 
   console.log(`[Server][P] Server lobby handlers registered. roomId=${SERVER_ROOM_ID}`)
+  console.log(`[Server][Combat] BONK envelope configured desktopRange=${formatServerAuditNumber(SERVER_BONK_RANGE)} desktopRadius=${formatServerAuditNumber(SERVER_BONK_RADIUS)} mobileScale=${SERVER_MOBILE_BONK_HIT_SCALE.toFixed(2)} mobileRange=${formatServerAuditNumber(SERVER_BONK_RANGE * SERVER_MOBILE_BONK_HIT_SCALE)} mobileRadius=${formatServerAuditNumber(SERVER_BONK_RADIUS * SERVER_MOBILE_BONK_HIT_SCALE)}`)
 }
 
 function handleJoinRoom(context: EventContext, displayName: string): void {
   const address = normalizeAddress(context.from)
   const existingPlayer = players.find((player) => player.address === address)
 
-  if (activeMatch && !existingPlayer) {
-    console.log(`[Server][U] joinRoom rejected match-${activeMatch.phase} address=${address} matchId=${activeMatch.matchId}`)
+  if ((activeMatch || pendingMatchStart) && !existingPlayer) {
+    const matchState = pendingMatchStart
+      ? 'starting'
+      : activeMatch?.phase ?? 'unknown'
+    const matchId = activeMatch?.matchId ?? 'pending'
+    console.log(`[Server][U] joinRoom rejected match-${matchState} address=${address} matchId=${matchId}`)
     void getDogeRoom().send('roomError', {
-      code: activeMatch.phase === 'active' ? 'match-active' : 'match-settling',
-      message: activeMatch.phase === 'active'
-        ? 'A match is already in progress'
-        : 'Waiting for players to exit',
+      code: pendingMatchStart ? 'match-starting' : activeMatch?.phase === 'active' ? 'match-active' : 'match-settling',
+      message: pendingMatchStart
+        ? 'Match is starting'
+        : activeMatch?.phase === 'active'
+          ? 'A match is already in progress'
+          : 'Waiting for players to exit',
     }, { to: [address] })
     return
   }
@@ -254,8 +316,10 @@ function handleJoinRoom(context: EventContext, displayName: string): void {
     return
   }
 
+  const normalizedDisplayName = normalizeDisplayName(displayName, address)
+
   if (existingPlayer) {
-    existingPlayer.displayName = normalizeDisplayName(displayName, address)
+    existingPlayer.displayName = normalizedDisplayName
     touchRoomPlayer(address)
     console.log(`[Server][P] joinRoom refreshed address=${address} ready=${existingPlayer.isReady} players=${players.length}/${SERVER_ROOM_MAX_PLAYERS}`)
   } else {
@@ -263,16 +327,62 @@ function handleJoinRoom(context: EventContext, displayName: string): void {
     players.push({
       id: address,
       address,
-      displayName: normalizeDisplayName(displayName, address),
+      displayName: normalizedDisplayName,
       isHost,
-      isReady: isHost,
+      isReady: false,
       isSimulated: false,
     })
     touchRoomPlayer(address)
-    console.log(`[Server][P] joinRoom accepted address=${address} host=${isHost} ready=${isHost} players=${players.length}/${SERVER_ROOM_MAX_PLAYERS}`)
+    console.log(`[Server][P] joinRoom accepted address=${address} host=${isHost} ready=false players=${players.length}/${SERVER_ROOM_MAX_PLAYERS}`)
   }
 
+  refreshLeaderboardPlayerName(address, normalizedDisplayName)
+
   broadcastRoomSnapshot('join')
+}
+
+function handleSpectateMatch(context: EventContext, displayName: string): void {
+  const address = normalizeAddress(context.from)
+  if (!activeMatch || activeMatch.phase !== 'active') {
+    void getDogeRoom().send('roomError', {
+      code: 'match-not-active',
+      message: 'No active match to watch',
+    }, { to: [address] })
+    return
+  }
+
+  if (players.some((player) => player.address === address)) {
+    void getDogeRoom().send('roomError', {
+      code: 'already-player',
+      message: 'You are already playing this match',
+    }, { to: [address] })
+    return
+  }
+
+  const normalizedDisplayName = normalizeDisplayName(displayName, address)
+  const existingSpectator = spectators.find((spectator) => spectator.address === address)
+  if (existingSpectator) {
+    existingSpectator.displayName = normalizedDisplayName
+    touchRoomMember(address)
+  } else {
+    if (spectators.length >= SERVER_ROOM_MAX_SPECTATORS) {
+      void getDogeRoom().send('roomError', {
+        code: 'spectators-full',
+        message: 'Spectator seats are full',
+      }, { to: [address] })
+      return
+    }
+
+    spectators.push({ address, displayName: normalizedDisplayName })
+    touchRoomMember(address)
+  }
+
+  const payload = createSpectatorMatchStartPayload(spectators.find((spectator) => spectator.address === address)!)
+  void getDogeRoom().send('matchStarted', {
+    payloadJson: JSON.stringify(payload),
+  }, { to: [address] })
+  console.log(`[Server][Spectator] watch accepted address=${address} matchId=${activeMatch.matchId} spectators=${spectators.length}/${SERVER_ROOM_MAX_SPECTATORS}`)
+  broadcastRoomSnapshot('spectator-join')
 }
 
 function handleLeaveRoom(context: EventContext, reason: string): void {
@@ -282,11 +392,22 @@ function handleLeaveRoom(context: EventContext, reason: string): void {
 
 function removePlayerFromRoom(address: string, reason: string): void {
   if (!players.some((player) => player.address === address)) {
-    console.log(`[Server][P] leaveRoom ignored missing-player address=${address} reason=${reason || 'none'}`)
+    const spectatorIndex = spectators.findIndex((spectator) => spectator.address === address)
+    if (spectatorIndex >= 0) {
+      spectators.splice(spectatorIndex, 1)
+      playerLastSeenSeconds.delete(address)
+      console.log(`[Server][Spectator] leave address=${address} reason=${reason || 'none'} spectators=${spectators.length}/${SERVER_ROOM_MAX_SPECTATORS}`)
+      broadcastRoomSnapshot('spectator-leave')
+      return
+    }
+    console.log(`[Server][P] leaveRoom ignored missing-member address=${address} reason=${reason || 'none'}`)
     return
   }
 
   const beforeCount = players.length
+  if (pendingMatchStart) {
+    cancelPendingMatchStart(`player-left:${reason || 'none'}`)
+  }
   const removedFromActiveMatch = markServerPlayerAsSpectator(address, `leave:${reason || 'none'}`)
 
   players = players.filter((player) => player.address !== address)
@@ -297,12 +418,19 @@ function removePlayerFromRoom(address: string, reason: string): void {
   }
 
   syncActiveMatchHostFlags()
-  const survivorEnded = removedFromActiveMatch && maybeEndMatchByFinalSurvivor('player-left')
+  const heartbeatTimeout = reason === 'heartbeat-timeout'
+  const survivorEnded = removedFromActiveMatch && !heartbeatTimeout && maybeEndMatchByFinalSurvivor('player-left')
 
   if (players.length === 0) {
     resetActiveMatch('room-empty')
   } else if (removedFromActiveMatch) {
-    broadcastPublicMatchSnapshot(survivorEnded ? 'final-survivor' : 'player-left')
+    if (heartbeatTimeout && activeMatch?.phase === 'active') {
+      activeMatch.heartbeatFinalSurvivorCheckSeconds = SERVER_HEARTBEAT_FINAL_SURVIVOR_GRACE_SECONDS
+      console.log(`[Server][U] final survivor deferred after heartbeat timeout address=${address} grace=${SERVER_HEARTBEAT_FINAL_SURVIVOR_GRACE_SECONDS}s`)
+    }
+    broadcastPublicMatchSnapshot(
+      survivorEnded ? 'final-survivor' : heartbeatTimeout ? 'heartbeat-timeout' : 'player-left'
+    )
   }
 
   console.log(`[Server][P] leaveRoom address=${address} reason=${reason || 'none'} players=${players.length}/${SERVER_ROOM_MAX_PLAYERS} before=${beforeCount}`)
@@ -318,8 +446,11 @@ function handleSetReady(context: EventContext, isReady: boolean): void {
     return
   }
 
-  if (activeMatch) {
-    console.log(`[Server][P] setReady ignored match-${activeMatch.phase} address=${address}`)
+  if (activeMatch || pendingMatchStart) {
+    const matchState = pendingMatchStart
+      ? 'starting'
+      : activeMatch?.phase ?? 'unknown'
+    console.log(`[Server][P] setReady ignored match-${matchState} address=${address}`)
     return
   }
 
@@ -332,9 +463,9 @@ function handleSetReady(context: EventContext, isReady: boolean): void {
 function handleRoomHeartbeat(context: EventContext, _status: string): void {
   const address = normalizeAddress(context.from)
 
-  if (!players.some((player) => player.address === address)) return
+  if (!players.some((player) => player.address === address) && !spectators.some((spectator) => spectator.address === address)) return
 
-  touchRoomPlayer(address)
+  touchRoomMember(address)
 }
 
 async function handleLeaderboardSnapshotRequest(context: EventContext, reason: string): Promise<void> {
@@ -352,7 +483,7 @@ async function handleLeaderboardSnapshotRequest(context: EventContext, reason: s
 async function handleLeaderboardExportRequest(context: EventContext, reason: string): Promise<void> {
   const address = normalizeAddress(context.from)
 
-  if (address !== LEADERBOARD_EXPORT_ADMIN_ADDRESS) {
+  if (!isDogeHuntAdmin(address)) {
     console.log(`[Server][LB] export rejected unauthorized address=${address}`)
     return
   }
@@ -366,9 +497,10 @@ async function handleLeaderboardExportRequest(context: EventContext, reason: str
   }
 }
 
-function handleRequestStartMatch(context: EventContext, requestId: string): void {
+function handleRequestStartMatch(context: EventContext, requestId: string, requestedMode: string): void {
   const address = normalizeAddress(context.from)
   const requester = players.find((player) => player.address === address)
+  const mode = requestedMode === 'solo' ? 'solo' : requestedMode === 'party' ? 'party' : null
 
   if (!requester) {
     console.log(`[Server][Q] requestStartMatch rejected missing-player address=${address} requestId=${requestId}`)
@@ -386,6 +518,24 @@ function handleRequestStartMatch(context: EventContext, requestId: string): void
     void getDogeRoom().send('matchError', {
       code: 'not-host',
       message: 'Only the host can start the match',
+    }, { to: [address] })
+    return
+  }
+
+  if (!mode) {
+    console.log(`[Server][Q] requestStartMatch rejected invalid-mode address=${address} mode=${requestedMode || 'none'} requestId=${requestId}`)
+    void getDogeRoom().send('matchError', {
+      code: 'invalid-start-mode',
+      message: 'Choose solo or party start',
+    }, { to: [address] })
+    return
+  }
+
+  if (pendingMatchStart) {
+    console.log(`[Server][Q] requestStartMatch rejected already-starting address=${address} requestId=${requestId}`)
+    void getDogeRoom().send('matchError', {
+      code: 'match-starting',
+      message: 'Match is already starting',
     }, { to: [address] })
     return
   }
@@ -408,22 +558,59 @@ function handleRequestStartMatch(context: EventContext, requestId: string): void
     return
   }
 
-  const snapshot = buildRoomSnapshot()
-  if (!snapshot.canHostStart) {
-    console.log(`[Server][Q] requestStartMatch rejected not-ready address=${address} requestId=${requestId}`)
+  if (!canStartCurrentRoom(mode)) {
+    console.log(`[Server][Q] requestStartMatch rejected not-ready address=${address} mode=${mode} requestId=${requestId}`)
     void getDogeRoom().send('matchError', {
       code: 'not-ready',
-      message: 'All players must be ready before starting',
+      message: mode === 'solo'
+        ? 'Ready up before starting solo'
+        : 'At least two ready players are needed to start a match',
     }, { to: [address] })
     return
   }
 
+  pendingMatchStart = {
+    requestedBy: address,
+    requestId,
+    mode,
+    countdownSeconds: SERVER_MATCH_START_COUNTDOWN_SECONDS,
+    lastBroadcastSeconds: SERVER_MATCH_START_COUNTDOWN_SECONDS,
+  }
+  console.log(`[Server][Q] match countdown started address=${address} mode=${mode} players=${players.length}/${SERVER_ROOM_MAX_PLAYERS} seconds=${SERVER_MATCH_START_COUNTDOWN_SECONDS} requestId=${requestId}`)
+  broadcastRoomSnapshot('match-countdown-started')
+}
+
+function canStartCurrentRoom(mode: 'solo' | 'party'): boolean {
+  if (activeMatch || pendingMatchStart) return false
+  if (mode === 'solo') {
+    return players.length === 1 && players[0].isHost && players[0].isReady
+  }
+  return players.length >= 2 && players.every((player) => player.isReady)
+}
+
+function cancelPendingMatchStart(reason: string): void {
+  if (!pendingMatchStart) return
+
+  console.log(`[Server][Q] match countdown cancelled reason=${reason} mode=${pendingMatchStart.mode} requestId=${pendingMatchStart.requestId}`)
+  pendingMatchStart = null
+}
+
+function beginPendingMatch(): void {
+  if (!pendingMatchStart) return
+
+  const pending = pendingMatchStart
+  if (!canStartPendingRoom(pending.mode)) {
+    cancelPendingMatchStart('room-no-longer-ready')
+    broadcastRoomSnapshot('match-countdown-cancelled')
+    return
+  }
+
+  pendingMatchStart = null
   const matchId = `server-match-${nextMatchId++}`
-  const publicDoges = createServerPublicDoges(matchId)
+  const publicDoges = createServerPublicDoges(matchId, getServerTotalDoges(players.length))
   matchVersion += 1
 
-  console.log(`[Server][Q] requestStartMatch accepted address=${address} requestId=${requestId} matchId=${matchId} players=${players.length}/${SERVER_ROOM_MAX_PLAYERS} version=${matchVersion}`)
-
+  console.log(`[Server][Q] match started address=${pending.requestedBy} mode=${pending.mode} requestId=${pending.requestId} matchId=${matchId} players=${players.length}/${SERVER_ROOM_MAX_PLAYERS} doges=${publicDoges.length} npcs=${Math.max(0, publicDoges.length - players.length)} version=${matchVersion}`)
   for (const targetPlayer of players) {
     const payload = createMatchStartPayload(targetPlayer, matchId, publicDoges, matchVersion)
     void getDogeRoom().send('matchStarted', {
@@ -438,6 +625,14 @@ function handleRequestStartMatch(context: EventContext, requestId: string): void
   broadcastServerNpcSnapshot('match-started')
 }
 
+function canStartPendingRoom(mode: 'solo' | 'party'): boolean {
+  if (activeMatch) return false
+  if (mode === 'solo') {
+    return players.length === 1 && players[0].isHost && players[0].isReady
+  }
+  return players.length >= 2 && players.every((player) => player.isReady)
+}
+
 function handleBonkRequest(context: EventContext, payloadJson: string): void {
   const address = normalizeAddress(context.from)
   const payload = parseServerBonkRequestPayload(payloadJson)
@@ -447,6 +642,9 @@ function handleBonkRequest(context: EventContext, payloadJson: string): void {
     return
   }
 
+  const hitEnvelope = getServerBonkHitEnvelope(payload.platform)
+  console.log(`[Server][RayBonk] received address=${address} requestId=${payload.requestId} matchId=${payload.matchId} npcTarget=${payload.targetPublicDogeId || 'none'} aimedPlayer=${payload.aimedPlayerPublicDogeId || 'none'} source=${payload.source} platform=${payload.platform} range=${formatServerAuditNumber(hitEnvelope.range)} radius=${formatServerAuditNumber(hitEnvelope.radius)}`)
+
   const rejectReason = getBonkBaseRejectReason(address, payload.matchId)
   if (rejectReason) {
     sendBonkResult(address, buildBonkResult(payload, 'rejected', rejectReason, 0))
@@ -455,13 +653,30 @@ function handleBonkRequest(context: EventContext, payloadJson: string): void {
   }
 
   const match = activeMatch as ActiveServerMatch
-  const target = resolveServerBonkTarget(address, payload.targetPublicDogeId)
+  const attackPose = getValidatedServerAttackPose(address, payload.origin, payload.yawDegrees)
+  const playerAimPose = payload.aimedPlayerPublicDogeId && attackPose
+    ? getServerAimPose(attackPose, payload.aimYawDegrees)
+    : null
+  const debugNpcSpatialBypass = payload.source === 'debug-eliminate-all' && isDogeHuntAdmin(address)
+  const target = resolveServerBonkTarget(
+    address,
+    payload.targetPublicDogeId,
+    payload.aimedPlayerPublicDogeId,
+    attackPose,
+    playerAimPose,
+    hitEnvelope,
+    debugNpcSpatialBypass
+  )
   const player = findServerPublicPlayer(address)
+
+  if (payload.source === 'debug-eliminate-all' && !debugNpcSpatialBypass) {
+    console.log(`[Server][Admin] debug eliminate all denied address=${address}`)
+  }
 
   if (typeof target === 'string' || !player) {
     const targetReason = typeof target === 'string' ? target : 'invalid-target'
     sendBonkResult(address, buildBonkResult(payload, 'rejected', targetReason, 0))
-    console.log(`[Server][S] bonk rejected reason=${targetReason} address=${address} target=${payload.targetPublicDogeId || 'server-resolve'} requestId=${payload.requestId}`)
+    console.log(`[Server][RayBonk] rejected reason=${targetReason} address=${address} npcTarget=${payload.targetPublicDogeId || 'none'} aimedPlayer=${payload.aimedPlayerPublicDogeId || 'none'} platform=${payload.platform} range=${formatServerAuditNumber(hitEnvelope.range)} radius=${formatServerAuditNumber(hitEnvelope.radius)} requestId=${payload.requestId}`)
     return
   }
 
@@ -470,7 +685,7 @@ function handleBonkRequest(context: EventContext, payloadJson: string): void {
   player.bonks += 1
 
   if (target.targetPlayer) {
-    markServerPlayerAsSpectator(target.targetPlayer.address, `bonk:${address}`)
+    markServerPlayerAsSpectator(target.targetPlayer.address, `bonk:${address}`, player.displayName)
   }
 
   const targetDogesAlive = getServerTargetDogesAlive()
@@ -482,7 +697,7 @@ function handleBonkRequest(context: EventContext, payloadJson: string): void {
   }
 
   sendBonkResult(address, buildBonkResult(payload, 'accepted', '', player.bonks, target.publicDoge.publicDogeId))
-  console.log(`[Server][V] bonk accepted address=${address} target=${target.publicDoge.publicDogeId} kind=${target.kind} targetPlayer=${target.targetPlayer?.address ?? 'none'} bonks=${player.bonks} targetAlive=${targetDogesAlive}/${match.decoyNpcCount} requestId=${payload.requestId}`)
+  console.log(`[Server][RayBonk] accepted address=${address} target=${target.publicDoge.publicDogeId} kind=${target.kind} targetPlayer=${target.targetPlayer?.address ?? 'none'} aimedPlayer=${payload.aimedPlayerPublicDogeId || 'none'} bonks=${player.bonks} targetAlive=${targetDogesAlive}/${match.decoyNpcCount} platform=${payload.platform} range=${formatServerAuditNumber(hitEnvelope.range)} radius=${formatServerAuditNumber(hitEnvelope.radius)} requestId=${payload.requestId}`)
   broadcastPublicMatchSnapshot(snapshotReason)
   broadcastServerNpcSnapshot(snapshotReason)
 }
@@ -684,6 +899,80 @@ function handleDebugMarkOutRequest(context: EventContext, payloadJson: string): 
   broadcastServerNpcSnapshot(survivorEnded ? 'final-survivor' : 'player-spectator')
 }
 
+function handleDebugEliminateAllRequest(context: EventContext, payloadJson: string): void {
+  const address = normalizeAddress(context.from)
+  const payload = parseServerDebugEliminateAllRequestPayload(payloadJson)
+
+  if (!payload) {
+    console.log(`[Server][Admin] debug eliminate all rejected invalid-payload address=${address}`)
+    return
+  }
+
+  if (!isDogeHuntAdmin(address)) {
+    sendDebugEliminateAllResult(address, {
+      requestId: payload.requestId,
+      matchId: payload.matchId,
+      outcome: 'rejected',
+      reason: 'unauthorized',
+      eliminatedCount: 0,
+      roundOver: Boolean(activeMatch?.phase === 'ended'),
+    })
+    console.log(`[Server][Admin] debug eliminate all rejected unauthorized address=${address} requestId=${payload.requestId}`)
+    return
+  }
+
+  if (!activeMatch || activeMatch.matchId !== payload.matchId) {
+    sendDebugEliminateAllResult(address, {
+      requestId: payload.requestId,
+      matchId: payload.matchId,
+      outcome: 'rejected',
+      reason: 'missing-match',
+      eliminatedCount: 0,
+      roundOver: false,
+    })
+    console.log(`[Server][Admin] debug eliminate all rejected missing-match address=${address} requestId=${payload.requestId}`)
+    return
+  }
+
+  if (activeMatch.phase !== 'active') {
+    sendDebugEliminateAllResult(address, {
+      requestId: payload.requestId,
+      matchId: payload.matchId,
+      outcome: 'rejected',
+      reason: 'match-ended',
+      eliminatedCount: 0,
+      roundOver: true,
+    })
+    console.log(`[Server][Admin] debug eliminate all rejected match-ended address=${address} requestId=${payload.requestId}`)
+    return
+  }
+
+  let eliminatedCount = 0
+  const firstDecoyIndex = activeMatch.playerCount
+  const lastDecoyIndex = firstDecoyIndex + activeMatch.decoyNpcCount
+  for (let index = firstDecoyIndex; index < lastDecoyIndex; index++) {
+    const decoy = activeMatch.publicDoges[index]
+    if (!decoy || decoy.isEliminated) continue
+
+    decoy.isEliminated = true
+    decoy.visualState = 'eliminated'
+    eliminatedCount += 1
+  }
+
+  const roundEnded = maybeEndMatchBySinglePlayerNpcClear('debug-eliminate-all')
+  sendDebugEliminateAllResult(address, {
+    requestId: payload.requestId,
+    matchId: payload.matchId,
+    outcome: 'accepted',
+    reason: '',
+    eliminatedCount,
+    roundOver: roundEnded,
+  })
+  console.log(`[Server][Admin] debug eliminate all accepted address=${address} eliminated=${eliminatedCount} matchId=${payload.matchId} roundOver=${roundEnded}`)
+  broadcastPublicMatchSnapshot(roundEnded ? 'debug-eliminate-all-ended' : 'debug-eliminate-all')
+  broadcastServerNpcSnapshot(roundEnded ? 'debug-eliminate-all-ended' : 'debug-eliminate-all')
+}
+
 function handleDebugForceRoundEndRequest(context: EventContext, payloadJson: string): void {
   const address = normalizeAddress(context.from)
   const payload = parseServerDebugForceRoundEndRequestPayload(payloadJson)
@@ -731,6 +1020,67 @@ function handleDebugForceRoundEndRequest(context: EventContext, payloadJson: str
   broadcastServerNpcSnapshot('debug-force-round-end')
 }
 
+function handleDebugNpcFreezeRequest(context: EventContext, payloadJson: string): void {
+  const address = normalizeAddress(context.from)
+  const payload = parseServerDebugNpcFreezeRequestPayload(payloadJson)
+
+  if (!payload) {
+    console.log(`[Server][Admin] debug NPC freeze rejected invalid-payload address=${address}`)
+    return
+  }
+
+  if (!isDogeHuntAdmin(address)) {
+    sendDebugNpcFreezeResult(address, {
+      requestId: payload.requestId,
+      matchId: payload.matchId,
+      outcome: 'rejected',
+      reason: 'unauthorized',
+      isFrozen: Boolean(activeMatch?.npcsFrozen),
+    })
+    console.log(`[Server][Admin] debug NPC freeze rejected unauthorized address=${address} requestId=${payload.requestId}`)
+    return
+  }
+
+  if (!activeMatch || activeMatch.matchId !== payload.matchId) {
+    sendDebugNpcFreezeResult(address, {
+      requestId: payload.requestId,
+      matchId: payload.matchId,
+      outcome: 'rejected',
+      reason: 'missing-match',
+      isFrozen: false,
+    })
+    console.log(`[Server][Admin] debug NPC freeze rejected missing-match address=${address} requestId=${payload.requestId}`)
+    return
+  }
+
+  if (activeMatch.phase !== 'active') {
+    sendDebugNpcFreezeResult(address, {
+      requestId: payload.requestId,
+      matchId: payload.matchId,
+      outcome: 'rejected',
+      reason: 'match-ended',
+      isFrozen: activeMatch.npcsFrozen,
+    })
+    console.log(`[Server][Admin] debug NPC freeze rejected match-ended address=${address} requestId=${payload.requestId}`)
+    return
+  }
+
+  activeMatch.npcsFrozen = !activeMatch.npcsFrozen
+  if (activeMatch.npcsFrozen) {
+    activeMatch.npcFrozenElapsedSeconds = activeMatch.elapsedSeconds
+  }
+
+  sendDebugNpcFreezeResult(address, {
+    requestId: payload.requestId,
+    matchId: payload.matchId,
+    outcome: 'accepted',
+    reason: '',
+    isFrozen: activeMatch.npcsFrozen,
+  })
+  console.log(`[Server][Admin] debug NPC freeze accepted address=${address} frozen=${activeMatch.npcsFrozen} frozenElapsed=${activeMatch.npcFrozenElapsedSeconds.toFixed(2)} matchId=${payload.matchId} requestId=${payload.requestId}`)
+  broadcastServerNpcSnapshot(activeMatch.npcsFrozen ? 'debug-npcs-frozen' : 'debug-npcs-resumed')
+}
+
 function broadcastRoomSnapshot(reason: string): void {
   const snapshot = buildRoomSnapshot()
 
@@ -739,11 +1089,11 @@ function broadcastRoomSnapshot(reason: string): void {
     snapshotJson: JSON.stringify(snapshot),
   })
 
-  for (const player of players) {
-    const personalizedSnapshot = buildRoomSnapshotForRecipient(player.address, snapshot.version)
+  for (const member of [...players, ...spectators]) {
+    const personalizedSnapshot = buildRoomSnapshotForRecipient(member.address, snapshot.version)
     void getDogeRoom().send('roomSnapshot', {
       snapshotJson: JSON.stringify(personalizedSnapshot),
-    }, { to: [player.address] })
+    }, { to: [member.address] })
   }
 }
 
@@ -757,6 +1107,26 @@ function sendRoomSnapshotToAddress(address: string, reason: string): void {
   void getDogeRoom().send('roomSnapshot', {
     snapshotJson: JSON.stringify(snapshot),
   }, { to: [normalizedAddress] })
+
+  sendActiveMatchResumeToAddress(normalizedAddress, reason)
+}
+
+function sendActiveMatchResumeToAddress(address: string, reason: string): void {
+  if (!activeMatch || (activeMatch.phase !== 'active' && activeMatch.phase !== 'ended')) return
+
+  const player = players.find((entry) => entry.address === address)
+  const spectator = spectators.find((entry) => entry.address === address)
+  if (!player && !spectator) return
+
+  const payload = player
+    ? createMatchStartPayload(player, activeMatch.matchId, activeMatch.publicDoges, activeMatch.version, true)
+    : createSpectatorMatchStartPayload(spectator!, true)
+
+  void getDogeRoom().send('matchStarted', {
+    payloadJson: JSON.stringify(payload),
+  }, { to: [address] })
+  sendCurrentPublicMatchSnapshotToAddress(address, `resume:${reason || 'request'}`)
+  console.log(`[Server][Resume] match session restored address=${address} matchId=${activeMatch.matchId} spectator=${Boolean(spectator)} phase=${activeMatch.phase}`)
 }
 
 function buildRoomSnapshot(): ServerRoomSnapshot {
@@ -771,14 +1141,20 @@ function buildRoomSnapshotForRecipient(recipientAddress: string, version: number
   const localPlayer = normalizedRecipientAddress
     ? players.find((player) => player.address === normalizedRecipientAddress)
     : undefined
+  const localSpectator = normalizedRecipientAddress
+    ? spectators.some((spectator) => spectator.address === normalizedRecipientAddress)
+    : false
   const phase = activeMatch?.phase === 'active'
     ? 'active'
     : activeMatch?.phase === 'ended'
       ? 'settling'
-      : players.length > 0
-        ? 'waiting'
-        : 'empty'
-  const canHostStart = phase === 'waiting' && players.length > 0 && players.every((player) => player.isHost || player.isReady)
+      : pendingMatchStart
+        ? 'starting'
+        : players.length > 0
+          ? 'waiting'
+          : 'empty'
+  const canHostStart = phase === 'waiting' && players.length >= 2 && players.every((player) => player.isReady)
+  const canHostStartSolo = phase === 'waiting' && players.length === 1 && Boolean(host?.isReady)
   const settlingSecondsRemaining = activeMatch?.phase === 'ended'
     ? Math.max(0, Math.ceil(SERVER_ROOM_SETTLING_TIMEOUT_SECONDS - activeMatch.settlingElapsedSeconds))
     : 0
@@ -788,15 +1164,20 @@ function buildRoomSnapshotForRecipient(recipientAddress: string, version: number
     phase,
     recipientAddress: normalizedRecipientAddress,
     isLocalPlayerInRoom: Boolean(localPlayer),
+    isLocalSpectator: localSpectator,
     localPlayerIsHost: Boolean(localPlayer?.isHost),
     localPlayerIsReady: Boolean(localPlayer?.isReady),
     players: [...players],
+    spectatorCount: spectators.length,
+    maxSpectators: SERVER_ROOM_MAX_SPECTATORS,
     playerCount: players.length,
     maxPlayers: SERVER_ROOM_MAX_PLAYERS,
     simulatedPlayerCount: 0,
     hostAddress: host?.address ?? '',
     hostDisplayName: host?.displayName ?? '',
     canHostStart,
+    canHostStartSolo,
+    startCountdownSeconds: pendingMatchStart ? Math.ceil(pendingMatchStart.countdownSeconds) : 0,
     canAddFakePlayer: false,
     canRemoveFakePlayer: false,
     settlingSecondsRemaining,
@@ -808,11 +1189,13 @@ function createMatchStartPayload(
   targetPlayer: ServerRoomPlayer,
   matchId: string,
   publicDoges: ReturnType<typeof createServerPublicDoges>,
-  version: number
+  version: number,
+  isResume = false
 ): ServerMatchStartPayload {
   const playerSlots = createPersonalizedPlayerSlots(targetPlayer)
   const playerCount = Math.max(1, players.length)
-  const decoyNpcCount = Math.max(0, SERVER_TOTAL_DOGES - playerCount)
+  const totalDoges = publicDoges.length
+  const decoyNpcCount = Math.max(0, totalDoges - playerCount)
   const targetIndex = Math.max(0, players.findIndex((player) => player.address === targetPlayer.address))
   const localPublicDogeId = publicDoges[targetIndex]?.publicDogeId ?? `${matchId}-doge-1`
   const localSlot = playerSlots.find((slot) => slot.isLocal) ?? playerSlots[0]
@@ -821,7 +1204,7 @@ function createMatchStartPayload(
   const matchConfig: LocalMatchConfig = {
     matchId,
     phase: 'active',
-    totalDoges: SERVER_TOTAL_DOGES,
+    totalDoges,
     playerCount,
     decoyNpcCount,
     playerSlots,
@@ -833,6 +1216,7 @@ function createMatchStartPayload(
     recipientAddress: targetPlayer.address,
     serverMatchId: matchId,
     version,
+    isResume,
     runtimeSeed: {
       source: 'server',
       localPlayerId: LOCAL_RUNTIME_PLAYER_ID,
@@ -848,6 +1232,55 @@ function createMatchStartPayload(
   }
 }
 
+function createSpectatorMatchStartPayload(spectator: ServerRoomSpectator, isResume = false): ServerMatchStartPayload {
+  if (!activeMatch) {
+    throw new Error('Cannot create spectator match payload without an active match')
+  }
+
+  const spectatorSlot: LocalMatchPlayerSlot = {
+    playerId: LOCAL_RUNTIME_PLAYER_ID,
+    displayName: spectator.displayName,
+    isLocal: true,
+    isHost: false,
+    isSimulated: false,
+    address: spectator.address,
+  }
+  const spectatorPrivatePlayer = createPrivatePlayerSeed(spectatorSlot, '')
+  spectatorPrivatePlayer.isAlive = false
+  spectatorPrivatePlayer.isSpectator = true
+  const playerSlots = players.map((player) => ({
+    playerId: player.address,
+    displayName: player.displayName,
+    isLocal: false,
+    isHost: player.isHost,
+    isSimulated: false,
+    address: player.address,
+  }))
+
+  return {
+    matchConfig: {
+      matchId: activeMatch.matchId,
+      phase: 'active',
+      totalDoges: activeMatch.totalDoges,
+      playerCount: activeMatch.playerCount,
+      decoyNpcCount: activeMatch.decoyNpcCount,
+      playerSlots,
+    },
+    recipientAddress: spectator.address,
+    serverMatchId: activeMatch.matchId,
+    version: activeMatch.version,
+    isSpectator: true,
+    isResume,
+    runtimeSeed: {
+      source: 'server',
+      localPlayerId: LOCAL_RUNTIME_PLAYER_ID,
+      publicDoges: activeMatch.publicDoges.map((doge) => ({ ...doge })),
+      privatePlayers: [spectatorPrivatePlayer],
+      privateDogeIdentities: [],
+    },
+  }
+}
+
 function setupServerRoomMaintenanceSystem(): void {
   if (roomMaintenanceSystemStarted) return
   roomMaintenanceSystemStarted = true
@@ -855,13 +1288,60 @@ function setupServerRoomMaintenanceSystem(): void {
   engine.addSystem((dt: number) => {
     roomElapsedSeconds += dt
     roomPruneAccumulator += dt
+    updatePendingMatchStart(dt)
     updateSettlingTimeout(dt)
+    updateHeartbeatFinalSurvivorCheck(dt)
 
     if (roomPruneAccumulator < SERVER_ROOM_PRUNE_INTERVAL_SECONDS) return
 
     roomPruneAccumulator = 0
     pruneStaleRoomPlayers()
   })
+}
+
+function updatePendingMatchStart(dt: number): void {
+  if (!pendingMatchStart) return
+
+  pendingMatchStart.countdownSeconds = Math.max(0, pendingMatchStart.countdownSeconds - dt)
+  const displaySeconds = Math.ceil(pendingMatchStart.countdownSeconds)
+  if (displaySeconds !== pendingMatchStart.lastBroadcastSeconds) {
+    pendingMatchStart.lastBroadcastSeconds = displaySeconds
+    broadcastRoomSnapshot('match-countdown-tick')
+  }
+
+  if (pendingMatchStart.countdownSeconds <= 0) {
+    beginPendingMatch()
+  }
+}
+
+function updateHeartbeatFinalSurvivorCheck(dt: number): void {
+  if (!activeMatch || activeMatch.phase !== 'active') return
+  if (activeMatch.heartbeatFinalSurvivorCheckSeconds <= 0) return
+
+  activeMatch.heartbeatFinalSurvivorCheckSeconds = Math.max(
+    0,
+    activeMatch.heartbeatFinalSurvivorCheckSeconds - dt
+  )
+  if (activeMatch.heartbeatFinalSurvivorCheckSeconds > 0) return
+
+  const activePlayers = activeMatch.publicPlayers.filter((player) => player.isAlive && player.status === 'active')
+  if (activePlayers.length !== 1) return
+
+  const survivor = activePlayers[0]
+  if (!isRoomPlayerRecentlySeen(survivor.address)) {
+    console.log(`[Server][U] final survivor cancelled: remaining player is not heartbeating address=${survivor.address}`)
+    return
+  }
+
+  endActiveMatch('final-survivor', survivor)
+  console.log(`[Server][U] final survivor confirmed after heartbeat grace winner=${survivor.address} matchId=${activeMatch?.matchId ?? 'none'}`)
+  broadcastPublicMatchSnapshot('final-survivor-heartbeat-confirmed')
+  broadcastServerNpcSnapshot('final-survivor-heartbeat-confirmed')
+}
+
+function isRoomPlayerRecentlySeen(address: string): boolean {
+  const lastSeen = playerLastSeenSeconds.get(normalizeAddress(address))
+  return lastSeen !== undefined && roomElapsedSeconds - lastSeen <= SERVER_RECENT_HEARTBEAT_SECONDS
 }
 
 function updateSettlingTimeout(dt: number): void {
@@ -887,28 +1367,32 @@ function releaseSettledRoom(reason: string): void {
 }
 
 function pruneStaleRoomPlayers(): void {
-  if (players.length === 0) return
+  if (players.length === 0 && spectators.length === 0) return
 
-  const stalePlayers = players.filter((player) => {
-    const lastSeen = playerLastSeenSeconds.get(player.address)
+  const staleMembers = [...players, ...spectators].filter((member) => {
+    const lastSeen = playerLastSeenSeconds.get(member.address)
     if (lastSeen === undefined) {
-      playerLastSeenSeconds.set(player.address, roomElapsedSeconds)
+      playerLastSeenSeconds.set(member.address, roomElapsedSeconds)
       return false
     }
 
     return roomElapsedSeconds - lastSeen >= SERVER_ROOM_HEARTBEAT_TIMEOUT_SECONDS
   })
 
-  for (const player of stalePlayers) {
-    const secondsSinceSeen = roomElapsedSeconds - (playerLastSeenSeconds.get(player.address) ?? roomElapsedSeconds)
-    console.log(`[Server][P] room heartbeat timeout address=${player.address} stale=${secondsSinceSeen.toFixed(1)}s`)
-    removePlayerFromRoom(player.address, 'heartbeat-timeout')
+  for (const member of staleMembers) {
+    const secondsSinceSeen = roomElapsedSeconds - (playerLastSeenSeconds.get(member.address) ?? roomElapsedSeconds)
+    console.log(`[Server][P] room heartbeat timeout address=${member.address} stale=${secondsSinceSeen.toFixed(1)}s`)
+    removePlayerFromRoom(member.address, 'heartbeat-timeout')
   }
 }
 
 function touchRoomPlayer(address: string): void {
+  touchRoomMember(address)
+}
+
+function touchRoomMember(address: string): void {
   const normalizedAddress = normalizeAddress(address)
-  if (!players.some((player) => player.address === normalizedAddress)) return
+  if (!players.some((player) => player.address === normalizedAddress) && !spectators.some((spectator) => spectator.address === normalizedAddress)) return
 
   playerLastSeenSeconds.set(normalizedAddress, roomElapsedSeconds)
 }
@@ -922,6 +1406,7 @@ function setupServerPublicStateSystem(): void {
 
     activeMatch.elapsedSeconds += dt
     activeMatch.tickAccumulator += dt
+    activeMatch.poseTickAccumulator += dt
 
     if (updateServerPlayerSkills(dt)) {
       broadcastPublicMatchSnapshot('turn-to-rock-ended')
@@ -929,15 +1414,25 @@ function setupServerPublicStateSystem(): void {
     }
 
     if (activeMatch.elapsedSeconds >= SERVER_ROUND_DURATION_SECONDS) {
-      endActiveMatch('time-up')
+      const timeUpWinner = getTimeUpWinner()
+      endActiveMatch('time-up', timeUpWinner)
+      console.log(`[Server][V] time-up winner=${timeUpWinner?.address ?? 'none'} matchId=${activeMatch.matchId}`)
       broadcastPublicMatchSnapshot('round-ended')
       broadcastServerNpcSnapshot('round-ended')
       return
     }
 
-    if (activeMatch.tickAccumulator < 1) return
+    if (activeMatch.tickAccumulator < 1) {
+      if (activeMatch.poseTickAccumulator >= SERVER_PLAYER_POSE_BROADCAST_INTERVAL_SECONDS) {
+        activeMatch.poseTickAccumulator = 0
+        broadcastPublicMatchSnapshot('pose')
+        broadcastServerNpcSnapshot('pose')
+      }
+      return
+    }
 
     activeMatch.tickAccumulator = 0
+    activeMatch.poseTickAccumulator = 0
     broadcastPublicMatchSnapshot('tick')
     broadcastServerNpcSnapshot('tick')
   })
@@ -949,13 +1444,14 @@ function createActiveServerMatch(
   version: number
 ): ActiveServerMatch {
   const playerCount = Math.max(1, players.length)
-  const decoyNpcCount = Math.max(0, SERVER_TOTAL_DOGES - playerCount)
+  const totalDoges = publicDoges.length
+  const decoyNpcCount = Math.max(0, totalDoges - playerCount)
 
   return {
     matchId,
     version,
     phase: 'active',
-    totalDoges: SERVER_TOTAL_DOGES,
+    totalDoges,
     playerCount,
     decoyNpcCount,
     publicDoges: publicDoges.map((doge) => ({ ...doge })),
@@ -977,7 +1473,11 @@ function createActiveServerMatch(
       cooldownSecondsRemaining: 0,
     })),
     elapsedSeconds: 0,
+    npcsFrozen: false,
+    npcFrozenElapsedSeconds: 0,
     tickAccumulator: 0,
+    poseTickAccumulator: 0,
+    heartbeatFinalSurvivorCheckSeconds: 0,
     endReason: null,
     winnerAddress: '',
     winnerDisplayName: '',
@@ -991,9 +1491,36 @@ function broadcastPublicMatchSnapshot(reason: string): void {
   if (!activeMatch) return
 
   activeMatch.version += 1
+  refreshPublicPlayerPoses()
+  const snapshot = createPublicMatchSnapshot(reason)
+
+  void getDogeRoom().send('publicStateSnapshot', {
+    snapshotJson: JSON.stringify(snapshot),
+  })
+  if (reason !== 'pose') {
+    console.log(`[Server][R] publicStateSnapshot sent reason=${reason} matchId=${snapshot.matchId} version=${snapshot.version} targetAlive=${snapshot.targetDogesAlive}/${snapshot.targetDogesTotal} publicAlive=${snapshot.publicAliveDoges}/${snapshot.totalDoges} timeLeft=${snapshot.timeLeftSeconds}`)
+  }
+}
+
+function sendCurrentPublicMatchSnapshotToAddress(address: string, reason: string): void {
+  if (!activeMatch) return
+
+  refreshPublicPlayerPoses()
+  const snapshot = createPublicMatchSnapshot(reason)
+  void getDogeRoom().send('publicStateSnapshot', {
+    snapshotJson: JSON.stringify(snapshot),
+  }, { to: [address] })
+  console.log(`[Server][Resume] public state restored address=${address} matchId=${snapshot.matchId} version=${snapshot.version} roundOver=${snapshot.roundOver}`)
+}
+
+function createPublicMatchSnapshot(reason: string): ServerPublicMatchSnapshot {
+  if (!activeMatch) {
+    throw new Error('Cannot create public match snapshot without an active match')
+  }
+
   const elapsedSeconds = Math.floor(activeMatch.elapsedSeconds)
   const timeLeftSeconds = Math.max(0, SERVER_ROUND_DURATION_SECONDS - elapsedSeconds)
-  const snapshot: ServerPublicMatchSnapshot = {
+  return {
     source: 'server',
     matchId: activeMatch.matchId,
     version: activeMatch.version,
@@ -1019,11 +1546,29 @@ function broadcastPublicMatchSnapshot(reason: string): void {
     winnerDisplayName: activeMatch.winnerDisplayName,
     winnerPublicDogeId: activeMatch.winnerPublicDogeId,
   }
+}
 
-  void getDogeRoom().send('publicStateSnapshot', {
-    snapshotJson: JSON.stringify(snapshot),
-  })
-  console.log(`[Server][R] publicStateSnapshot sent reason=${reason} matchId=${snapshot.matchId} version=${snapshot.version} targetAlive=${snapshot.targetDogesAlive}/${snapshot.targetDogesTotal} publicAlive=${snapshot.publicAliveDoges}/${snapshot.totalDoges} timeLeft=${snapshot.timeLeftSeconds}`)
+function refreshPublicPlayerPoses(): void {
+  if (!activeMatch) return
+
+  for (const player of activeMatch.publicPlayers) {
+    const transform = findServerPlayerTransform(player.address)
+    if (!transform) continue
+
+    player.pose = {
+      position: {
+        x: transform.position.x,
+        y: transform.position.y,
+        z: transform.position.z,
+      },
+      rotation: {
+        x: transform.rotation.x,
+        y: transform.rotation.y,
+        z: transform.rotation.z,
+        w: transform.rotation.w,
+      },
+    }
+  }
 }
 
 function broadcastServerNpcSnapshot(reason: string): void {
@@ -1036,14 +1581,25 @@ function broadcastServerNpcSnapshot(reason: string): void {
   const payload = createServerNpcSnapshot({
     matchId: activeMatch.matchId,
     version: activeMatch.version,
-    elapsedSeconds: Math.floor(activeMatch.elapsedSeconds),
+    elapsedSeconds: getServerNpcSimulationElapsedSeconds(),
+    isFrozen: activeMatch.npcsFrozen,
     publicDoges: decoyDoges,
   })
 
   void getDogeRoom().send('npcStateSnapshot', {
     payloadJson: JSON.stringify(payload),
   })
-  console.log(`[Server][W2] npcStateSnapshot sent reason=${reason} matchId=${payload.matchId} version=${payload.version} npcs=${payload.npcs.length}`)
+  if (reason !== 'pose') {
+    console.log(`[Server][W2] npcStateSnapshot sent reason=${reason} matchId=${payload.matchId} version=${payload.version} npcs=${payload.npcs.length} frozen=${payload.isFrozen}`)
+  }
+}
+
+function getServerNpcSimulationElapsedSeconds(): number {
+  if (!activeMatch) return 0
+
+  return activeMatch.npcsFrozen
+    ? activeMatch.npcFrozenElapsedSeconds
+    : activeMatch.elapsedSeconds
 }
 
 function updateServerPlayerSkills(dt: number): boolean {
@@ -1078,7 +1634,7 @@ function updateServerPlayerSkills(dt: number): boolean {
   return changedPublicState
 }
 
-function markServerPlayerAsSpectator(address: string, reason: string): boolean {
+function markServerPlayerAsSpectator(address: string, reason: string, attackerDisplayName = ''): boolean {
   const player = findServerPublicPlayer(address)
   if (!player || !activeMatch) return false
   if (activeMatch.phase !== 'active') return false
@@ -1086,6 +1642,7 @@ function markServerPlayerAsSpectator(address: string, reason: string): boolean {
 
   player.isAlive = false
   player.status = 'spectator'
+  player.eliminatedByDisplayName = attackerDisplayName
   if (!player.eliminationOrder) {
     player.eliminationOrder = activeMatch.nextEliminationOrder
     activeMatch.nextEliminationOrder += 1
@@ -1122,16 +1679,32 @@ function resetActiveMatch(reason: string): void {
 
   console.log(`[Server][U] activeMatch reset reason=${reason} matchId=${activeMatch.matchId} phase=${activeMatch.phase}`)
   activeMatch = null
+  if (spectators.length > 0) {
+    console.log(`[Server][Spectator] match reset removed spectators=${spectators.length}`)
+    spectators = []
+  }
 }
 
 function resolveServerBonkTarget(
   attackerAddress: string,
-  requestedPublicDogeId: string
+  requestedPublicDogeId: string,
+  aimedPlayerPublicDogeId: string,
+  attackPose: ServerAttackPose | null,
+  playerAimPose: ServerAttackPose | null,
+  hitEnvelope: ServerBonkHitEnvelope,
+  debugNpcSpatialBypass = false
 ): ServerBonkTarget | ServerBonkRejectReason {
   if (!activeMatch) return 'missing-match'
 
-  const playerTarget = resolveServerPlayerBonkTarget(attackerAddress, requestedPublicDogeId)
-  if (playerTarget) return playerTarget
+  if (!debugNpcSpatialBypass) {
+    const playerTarget = resolveServerPlayerBonkTarget(
+      attackerAddress,
+      aimedPlayerPublicDogeId,
+      playerAimPose,
+      hitEnvelope
+    )
+    if (playerTarget) return playerTarget
+  }
   if (!requestedPublicDogeId) return 'invalid-target'
 
   const targetIndex = activeMatch.publicDoges.findIndex((doge) => doge.publicDogeId === requestedPublicDogeId)
@@ -1144,6 +1717,41 @@ function resolveServerBonkTarget(
     return 'invalid-target'
   }
 
+  if (debugNpcSpatialBypass) {
+    console.log(`[Server][Admin] debug NPC spatial bypass accepted address=${attackerAddress} doge=${publicDoge.publicDogeId}`)
+    return {
+      kind: 'decoy',
+      publicDoge,
+      targetPlayer: null,
+    }
+  }
+
+  if (!attackPose) return 'invalid-target'
+
+  const decoyIndex = targetIndex - activeMatch.playerCount
+  const npcSimulationElapsedSeconds = getServerNpcSimulationElapsedSeconds()
+  const currentPose = getServerNpcTransform(
+    publicDoge.publicDogeId,
+    decoyIndex,
+    npcSimulationElapsedSeconds
+  )
+  const compensatedPose = getServerNpcTransform(
+    publicDoge.publicDogeId,
+    decoyIndex,
+    activeMatch.npcsFrozen
+      ? npcSimulationElapsedSeconds
+      : Math.max(0, npcSimulationElapsedSeconds - SERVER_NPC_HIT_LAG_COMPENSATION_SECONDS)
+  )
+  const currentMeasurement = measureServerBonkPosition(attackPose, currentPose, hitEnvelope)
+  const compensatedMeasurement = measureServerBonkPosition(attackPose, compensatedPose, hitEnvelope)
+
+  if (!currentMeasurement.inArc && !compensatedMeasurement.inArc) {
+    console.log(`[Server][Combat] npcSpatial rejected attacker=${attackerAddress} doge=${publicDoge.publicDogeId} currentDistance=${formatServerAuditNumber(currentMeasurement.distance)} compensatedDistance=${formatServerAuditNumber(compensatedMeasurement.distance)} range=${formatServerAuditNumber(hitEnvelope.range)} radius=${formatServerAuditNumber(hitEnvelope.radius)}`)
+    return 'invalid-target'
+  }
+
+  console.log(`[Server][Combat] npcSpatial accepted attacker=${attackerAddress} doge=${publicDoge.publicDogeId} compensated=${currentMeasurement.inArc ? 'no' : 'yes'} range=${formatServerAuditNumber(hitEnvelope.range)} radius=${formatServerAuditNumber(hitEnvelope.radius)}`)
+
   return {
     kind: 'decoy',
     publicDoge,
@@ -1153,79 +1761,54 @@ function resolveServerBonkTarget(
 
 function resolveServerPlayerBonkTarget(
   attackerAddress: string,
-  requestedPublicDogeId: string
+  aimedPlayerPublicDogeId: string,
+  aimPose: ServerAttackPose | null,
+  hitEnvelope: ServerBonkHitEnvelope
 ): ServerBonkTarget | ServerBonkRejectReason | null {
   if (!activeMatch) return null
+  if (!aimedPlayerPublicDogeId) return null
 
-  const requestedPlayer = requestedPublicDogeId
-    ? findServerPublicPlayerByDogeId(requestedPublicDogeId)
-    : null
-  let requestedPlayerRejectReason: ServerBonkRejectReason | null = null
+  const requestedPlayer = findServerPublicPlayerByDogeId(aimedPlayerPublicDogeId)
+  if (!requestedPlayer) {
+    console.log(`[Server][RayBonk] player rejected reason=unknown-aimed-player attacker=${attackerAddress} aimed=${aimedPlayerPublicDogeId}`)
+    return 'invalid-target'
+  }
 
-  if (requestedPlayer?.address === attackerAddress) {
-    console.log(`[Server][W3a] playerSpatial rejected self-target attacker=${attackerAddress} requested=${requestedPublicDogeId}`)
+  if (requestedPlayer.address === attackerAddress) {
+    console.log(`[Server][RayBonk] player rejected reason=self-target attacker=${attackerAddress} aimed=${aimedPlayerPublicDogeId}`)
     return 'self-target'
   }
 
-  if (requestedPlayer && (!requestedPlayer.isAlive || requestedPlayer.status !== 'active')) {
-    requestedPlayerRejectReason = 'already-eliminated'
+  if (!requestedPlayer.isAlive || requestedPlayer.status !== 'active') {
+    console.log(`[Server][RayBonk] player rejected reason=already-eliminated attacker=${attackerAddress} aimed=${aimedPlayerPublicDogeId}`)
+    return 'already-eliminated'
   }
 
-  const candidates = activeMatch.publicPlayers.filter((candidate) => {
-    return candidate.address !== attackerAddress && candidate.isAlive && candidate.status === 'active'
-  })
-  const attackPose = getServerAttackPose(attackerAddress)
-  const requestedKind = requestedPlayer
-    ? 'player'
-    : requestedPublicDogeId
-      ? 'decoy-or-invalid'
-      : 'none'
-
-  console.log(`[Server][W3a] playerSpatial attacker=${attackerAddress} attackerTransform=${attackPose ? 'yes' : 'no'} requested=${requestedPublicDogeId || 'none'} requestedKind=${requestedKind} candidates=${candidates.length}`)
-
-  if (!attackPose) {
-    return requestedPlayerRejectReason ?? (requestedPlayer ? 'invalid-target' : null)
+  if (!aimPose) {
+    console.log(`[Server][RayBonk] player rejected reason=missing-aim-pose attacker=${attackerAddress} aimed=${aimedPlayerPublicDogeId}`)
+    return 'invalid-target'
   }
 
-  console.log(`[Server][W3a] playerSpatial attackerPose origin=${formatServerVectorXZ(attackPose.origin)} forward=${formatServerVectorXZ(attackPose.forward)} range=${SERVER_BONK_RANGE} radius=${SERVER_BONK_RADIUS}`)
+  const publicDoge = findServerPublicDoge(requestedPlayer.publicDogeId)
+  const measurement = measureServerPlayerBonkCandidate(aimPose, requestedPlayer.address, hitEnvelope)
+  console.log(`[Server][RayBonk] player validate attacker=${attackerAddress} aimed=${aimedPlayerPublicDogeId} targetAddress=${requestedPlayer.address} transform=${measurement.transformFound ? 'yes' : 'no'} forward=${formatServerAuditNumber(measurement.forwardDistance)} lateral=${formatServerAuditNumber(measurement.lateralDistance)} distance=${formatServerAuditNumber(measurement.distance)} inArc=${measurement.inArc ? 'yes' : 'no'}`)
 
-  let bestCandidate: ServerPlayerBonkCandidate | null = null
-  let bestDistance = Number.POSITIVE_INFINITY
-
-  for (const candidate of candidates) {
-    const publicDoge = findServerPublicDoge(candidate.publicDogeId)
-    const measurement = measureServerPlayerBonkCandidate(attackPose, candidate.address)
-
-    console.log(`[Server][W3a] playerSpatial candidate=${candidate.address} doge=${candidate.publicDogeId} dogeAlive=${publicDoge && !publicDoge.isEliminated ? 'yes' : 'no'} transform=${measurement.transformFound ? 'yes' : 'no'} forward=${formatServerAuditNumber(measurement.forwardDistance)} lateral=${formatServerAuditNumber(measurement.lateralDistance)} distance=${formatServerAuditNumber(measurement.distance)} inArc=${measurement.inArc ? 'yes' : 'no'}`)
-
-    if (!publicDoge || publicDoge.isEliminated) continue
-    if (!measurement.inArc || measurement.distance === null) continue
-
-    if (measurement.distance < bestDistance) {
-      bestDistance = measurement.distance
-      bestCandidate = {
-        player: candidate,
-        publicDoge,
-        measurement,
-      }
-    }
+  if (!publicDoge || publicDoge.isEliminated) return 'already-eliminated'
+  if (!measurement.inArc || measurement.distance === null) {
+    return 'invalid-target'
   }
 
-  if (bestCandidate) {
-    console.log(`[Server][W3a] playerSpatial selected target=${bestCandidate.player.address} doge=${bestCandidate.publicDoge.publicDogeId} distance=${formatServerAuditNumber(bestCandidate.measurement.distance)} requested=${requestedPublicDogeId || 'none'}`)
-    return {
-      kind: 'player',
-      publicDoge: bestCandidate.publicDoge,
-      targetPlayer: bestCandidate.player,
-    }
+  return {
+    kind: 'player',
+    publicDoge,
+    targetPlayer: requestedPlayer,
   }
-
-  return requestedPlayerRejectReason ?? (requestedPlayer ? 'invalid-target' : null)
 }
 
 function measureServerPlayerBonkCandidate(
   attackPose: ServerAttackPose,
-  targetAddress: string
+  targetAddress: string,
+  hitEnvelope: ServerBonkHitEnvelope
 ): ServerPlayerBonkMeasurement {
   const targetTransform = findServerPlayerTransform(targetAddress)
   if (!targetTransform) {
@@ -1238,8 +1821,16 @@ function measureServerPlayerBonkCandidate(
     }
   }
 
+  return measureServerBonkPosition(attackPose, targetTransform.position, hitEnvelope)
+}
+
+function measureServerBonkPosition(
+  attackPose: ServerAttackPose,
+  targetPosition: { x: number; z: number },
+  hitEnvelope: ServerBonkHitEnvelope
+): ServerPlayerBonkMeasurement {
   const toTarget = Vector3.subtract(
-    Vector3.create(targetTransform.position.x, 0, targetTransform.position.z),
+    Vector3.create(targetPosition.x, 0, targetPosition.z),
     attackPose.origin
   )
   const forwardDistance = Vector3.dot(toTarget, attackPose.forward)
@@ -1254,9 +1845,9 @@ function measureServerPlayerBonkCandidate(
     distance,
     forwardDistance,
     lateralDistance,
-    inArc: forwardDistance >= SERVER_BONK_MIN_FORWARD
-      && forwardDistance <= SERVER_BONK_RANGE
-      && lateralDistance <= SERVER_BONK_RADIUS,
+    inArc: forwardDistance >= hitEnvelope.minForward
+      && forwardDistance <= hitEnvelope.range
+      && lateralDistance <= hitEnvelope.radius,
   }
 }
 
@@ -1275,6 +1866,55 @@ function getServerAttackPose(address: string): ServerAttackPose | null {
     origin: Vector3.create(transform.position.x, 0, transform.position.z),
     forward,
   }
+}
+
+function getValidatedServerAttackPose(
+  address: string,
+  clientOrigin: { x: number; y: number; z: number },
+  clientYawDegrees: number
+): ServerAttackPose | null {
+  const authoritativePose = getServerAttackPose(address)
+  if (!authoritativePose) return null
+
+  const claimedOrigin = Vector3.create(clientOrigin.x, 0, clientOrigin.z)
+  const originDelta = Vector3.distance(authoritativePose.origin, claimedOrigin)
+  const authoritativeYaw = Math.atan2(authoritativePose.forward.x, authoritativePose.forward.z) * 180 / Math.PI
+  const yawDelta = Math.abs(wrapServerAngleDegrees(clientYawDegrees - authoritativeYaw))
+
+  const yawRadians = clientYawDegrees * Math.PI / 180
+  const compensatedPose = {
+    origin: originDelta <= SERVER_BONK_CLIENT_ORIGIN_TOLERANCE
+      ? claimedOrigin
+      : authoritativePose.origin,
+    forward: Vector3.create(Math.sin(yawRadians), 0, Math.cos(yawRadians)),
+  }
+
+  if (originDelta > SERVER_BONK_CLIENT_ORIGIN_TOLERANCE) {
+    console.log(`[Server][Combat] client attack origin rejected address=${address} originDelta=${formatServerAuditNumber(originDelta)} using=server-origin`)
+  } else if (originDelta >= 0.1) {
+    console.log(`[Server][Combat] client attack origin compensated address=${address} originDelta=${formatServerAuditNumber(originDelta)}`)
+  }
+
+  if (yawDelta > SERVER_BONK_CLIENT_YAW_AUDIT_DEGREES) {
+    console.log(`[Server][Combat] client attack yaw divergence accepted address=${address} yawDelta=${formatServerAuditNumber(yawDelta)}`)
+  }
+
+  return compensatedPose
+}
+
+function getServerAimPose(attackPose: ServerAttackPose, aimYawDegrees: number): ServerAttackPose {
+  const yawRadians = aimYawDegrees * Math.PI / 180
+  return {
+    origin: attackPose.origin,
+    forward: Vector3.create(Math.sin(yawRadians), 0, Math.cos(yawRadians)),
+  }
+}
+
+function wrapServerAngleDegrees(angle: number): number {
+  let wrapped = angle
+  while (wrapped > 180) wrapped -= 360
+  while (wrapped < -180) wrapped += 360
+  return wrapped
 }
 
 function findServerPlayerTransform(address: string): ServerPlayerTransform | null {
@@ -1330,6 +1970,19 @@ function maybeEndMatchBySinglePlayerNpcClear(trigger: string, winner?: ServerPub
   endActiveMatch('all-doges-eliminated', winningPlayer)
   console.log(`[Server][V] single-player npc clear trigger=${trigger} winner=${winningPlayer?.address ?? 'none'} matchId=${activeMatch.matchId}`)
   return true
+}
+
+function getTimeUpWinner(): ServerPublicPlayerState | undefined {
+  if (!activeMatch || activeMatch.playerCount <= 1) return undefined
+
+  // Use the exact same ranking order that the results UI and score awards use.
+  const ranked = rankServerPlayers(activeMatch.publicPlayers, '')
+  const topPlayer = ranked[0]
+  if (!topPlayer) return undefined
+
+  return activeMatch.publicPlayers.find((player) => {
+    return normalizeAddress(player.address) === normalizeAddress(topPlayer.address)
+  })
 }
 
 function endActiveMatch(reason: LocalRoundEndReason, winner?: ServerPublicPlayerState): void {
@@ -1427,12 +2080,13 @@ function getRoundEndRejectReason(
 }
 
 function buildBonkResult(
-  payload: { requestId: string; matchId: string; targetPublicDogeId: string; origin: { x: number; y: number; z: number } },
+  payload: { requestId: string; matchId: string; targetPublicDogeId: string; origin: { x: number; y: number; z: number }; platform: ServerBonkRequestPlatform },
   outcome: 'accepted' | 'rejected',
   reason: ServerBonkRejectReason | '',
   bonks: number,
   resolvedTargetPublicDogeId = payload.targetPublicDogeId
 ): ServerBonkResultPayload {
+  const hitEnvelope = getServerBonkHitEnvelope(payload.platform)
   return {
     requestId: payload.requestId,
     matchId: payload.matchId,
@@ -1444,6 +2098,9 @@ function buildBonkResult(
     targetDogesAlive: getServerTargetDogesAlive(),
     targetDogesTotal: activeMatch?.decoyNpcCount ?? 0,
     roundOver: activeMatch?.phase === 'ended',
+    serverPlatform: payload.platform,
+    validatedRange: hitEnvelope.range,
+    validatedRadius: hitEnvelope.radius,
   }
 }
 
@@ -1496,8 +2153,20 @@ function sendDebugMarkOutResult(address: string, payload: ServerDebugMarkOutResu
   }, { to: [address] })
 }
 
+function sendDebugEliminateAllResult(address: string, payload: ServerDebugEliminateAllResultPayload): void {
+  void getDogeRoom().send('debugEliminateAllResult', {
+    payloadJson: JSON.stringify(payload),
+  }, { to: [address] })
+}
+
 function sendDebugForceRoundEndResult(address: string, payload: ServerDebugForceRoundEndResultPayload): void {
   void getDogeRoom().send('debugForceRoundEndResult', {
+    payloadJson: JSON.stringify(payload),
+  }, { to: [address] })
+}
+
+function sendDebugNpcFreezeResult(address: string, payload: ServerDebugNpcFreezeResultPayload): void {
+  void getDogeRoom().send('debugNpcFreezeResult', {
     payloadJson: JSON.stringify(payload),
   }, { to: [address] })
 }
@@ -1575,5 +2244,5 @@ function normalizeAddress(address: string): string {
 
 function normalizeDisplayName(displayName: string, address: string): string {
   const normalized = displayName.trim().slice(0, 24)
-  return normalized || `Player ${address.slice(2, 8)}`
+  return normalized || 'Player'
 }

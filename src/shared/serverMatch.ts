@@ -12,10 +12,17 @@ export type ServerMatchStartPayload = {
   recipientAddress: string
   serverMatchId: string
   version: number
+  isSpectator?: boolean
+  isResume?: boolean
 }
 
-export const SERVER_TOTAL_DOGES = 12
+export const SERVER_MIN_TOTAL_DOGES = 12
 export const LOCAL_RUNTIME_PLAYER_ID = 'local-player'
+
+export function getServerTotalDoges(playerCount: number): number {
+  const activePlayers = Math.max(1, Math.floor(playerCount))
+  return Math.max(SERVER_MIN_TOTAL_DOGES, activePlayers * 2)
+}
 
 export function parseServerMatchStartPayload(payloadJson: string): ServerMatchStartPayload | null {
   try {
@@ -26,7 +33,7 @@ export function parseServerMatchStartPayload(payloadJson: string): ServerMatchSt
   }
 }
 
-export function createServerPublicDoges(matchId: string, totalDoges = SERVER_TOTAL_DOGES): PublicDogeState[] {
+export function createServerPublicDoges(matchId: string, totalDoges = SERVER_MIN_TOTAL_DOGES): PublicDogeState[] {
   const doges: PublicDogeState[] = []
 
   for (let i = 0; i < totalDoges; i++) {
@@ -53,6 +60,7 @@ export function createPrivatePlayerSeed(
     isSimulated: playerSlot.isSimulated,
     publicDogeId,
     isAlive: true,
+    isSpectator: false,
     bonks: 0,
     turnToRock: {
       isActive: false,

@@ -111,7 +111,7 @@
       }
     },
     {
-      "name": "inspector::SceneMetadata-v4",
+      "name": "inspector::SceneMetadata-v5",
       "jsonSchema": {
         "type": "object",
         "properties": {
@@ -437,6 +437,14 @@
               "type": "boolean",
               "serializationType": "boolean"
             }
+          },
+          "hideLandscapeTerrain": {
+            "type": "boolean",
+            "serializationType": "optional",
+            "optionalJsonSchema": {
+              "type": "boolean",
+              "serializationType": "boolean"
+            }
           }
         },
         "serializationType": "map"
@@ -649,7 +657,8 @@
             ],
             "skyboxConfig": {},
             "creator": "0x797066a17F83425C1B4C7a8Cca52D19095520a52",
-            "disableNearbyVoiceChat": false
+            "disableNearbyVoiceChat": false,
+            "hideLandscapeTerrain": false
           }
         }
       }

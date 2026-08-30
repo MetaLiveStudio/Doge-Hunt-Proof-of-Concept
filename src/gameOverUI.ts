@@ -4,12 +4,11 @@
 import { GameState, setState } from './gameState'
 import { uiState } from './uiManager'
 import { hideHud } from './hud'
-import { releasePlayerAvatarVisibility } from './player'
 
 export function showGameOverUI(): void {
   console.log('[GameOver] Showing game over UI')
-  releasePlayerAvatarVisibility()
   hideHud()  // Hide HUD first!
+  uiState.resultPage = 0
   uiState.showGameOver = true
   setState(GameState.GAME_OVER)
 }

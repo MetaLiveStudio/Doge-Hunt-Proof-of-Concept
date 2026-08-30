@@ -9,11 +9,18 @@ export type SerializableVector3 = {
   z: number
 }
 
+export type ServerBonkRequestPlatform = 'desktop' | 'mobile'
+
 export type ServerBonkRequestPayload = {
   requestId: string
   matchId: string
   targetPublicDogeId: string
+  aimedPlayerPublicDogeId: string
   origin: SerializableVector3
+  yawDegrees: number
+  aimYawDegrees: number
+  platform: ServerBonkRequestPlatform
+  source: 'attack' | 'debug-eliminate-all'
 }
 
 export type ServerBonkActionRequestPayload = {
@@ -53,6 +60,9 @@ export type ServerBonkResultPayload = {
   targetDogesAlive: number
   targetDogesTotal: number
   roundOver: boolean
+  serverPlatform?: ServerBonkRequestPlatform
+  validatedRange?: number
+  validatedRadius?: number
 }
 
 export type ServerTurnToRockRequestPayload = {
@@ -128,6 +138,21 @@ export type ServerDebugMarkOutResultPayload = {
   status: 'active' | 'out' | 'spectator'
 }
 
+export type ServerDebugEliminateAllRequestPayload = {
+  requestId: string
+  matchId: string
+  reason: 'debug-eliminate-all'
+}
+
+export type ServerDebugEliminateAllResultPayload = {
+  requestId: string
+  matchId: string
+  outcome: 'accepted' | 'rejected'
+  reason: '' | 'unauthorized' | 'missing-match' | 'match-ended'
+  eliminatedCount: number
+  roundOver: boolean
+}
+
 export type ServerDebugForceRoundEndRequestPayload = {
   requestId: string
   matchId: string
@@ -142,15 +167,40 @@ export type ServerDebugForceRoundEndResultPayload = {
   roundOver: boolean
 }
 
+export type ServerDebugNpcFreezeRequestPayload = {
+  requestId: string
+  matchId: string
+  reason: 'debug-toggle-npc-freeze'
+}
+
+export type ServerDebugNpcFreezeResultPayload = {
+  requestId: string
+  matchId: string
+  outcome: 'accepted' | 'rejected'
+  reason: '' | 'unauthorized' | 'missing-match' | 'match-ended'
+  isFrozen: boolean
+}
+
 export function parseServerBonkRequestPayload(payloadJson: string): ServerBonkRequestPayload | null {
   const parsed = parsePayload<ServerBonkRequestPayload>(payloadJson)
   if (!parsed) return null
   if (typeof parsed.requestId !== 'string') return null
   if (typeof parsed.matchId !== 'string') return null
   if (typeof parsed.targetPublicDogeId !== 'string') return null
+  if (parsed.aimedPlayerPublicDogeId !== undefined && typeof parsed.aimedPlayerPublicDogeId !== 'string') return null
   if (!isSerializableVector3(parsed.origin)) return null
+  if (typeof parsed.yawDegrees !== 'number' || !Number.isFinite(parsed.yawDegrees)) return null
+  if (parsed.aimYawDegrees !== undefined && (typeof parsed.aimYawDegrees !== 'number' || !Number.isFinite(parsed.aimYawDegrees))) return null
+  if (parsed.source !== undefined && parsed.source !== 'attack' && parsed.source !== 'debug-eliminate-all') return null
+  if (parsed.platform !== undefined && parsed.platform !== 'desktop' && parsed.platform !== 'mobile') return null
 
-  return parsed
+  return {
+    ...parsed,
+    aimedPlayerPublicDogeId: parsed.aimedPlayerPublicDogeId ?? '',
+    aimYawDegrees: parsed.aimYawDegrees ?? parsed.yawDegrees,
+    platform: parsed.platform ?? 'desktop',
+    source: parsed.source ?? 'attack',
+  }
 }
 
 export function parseServerBonkActionRequestPayload(payloadJson: string): ServerBonkActionRequestPayload | null {
@@ -191,6 +241,9 @@ export function parseServerBonkResultPayload(payloadJson: string): ServerBonkRes
   if (typeof parsed.targetDogesAlive !== 'number') return null
   if (typeof parsed.targetDogesTotal !== 'number') return null
   if (typeof parsed.roundOver !== 'boolean') return null
+  if (parsed.serverPlatform !== undefined && parsed.serverPlatform !== 'desktop' && parsed.serverPlatform !== 'mobile') return null
+  if (parsed.validatedRange !== undefined && typeof parsed.validatedRange !== 'number') return null
+  if (parsed.validatedRadius !== undefined && typeof parsed.validatedRadius !== 'number') return null
 
   return parsed
 }
@@ -283,6 +336,29 @@ export function parseServerDebugMarkOutResultPayload(payloadJson: string): Serve
   return parsed
 }
 
+export function parseServerDebugEliminateAllRequestPayload(payloadJson: string): ServerDebugEliminateAllRequestPayload | null {
+  const parsed = parsePayload<ServerDebugEliminateAllRequestPayload>(payloadJson)
+  if (!parsed) return null
+  if (typeof parsed.requestId !== 'string') return null
+  if (typeof parsed.matchId !== 'string') return null
+  if (parsed.reason !== 'debug-eliminate-all') return null
+
+  return parsed
+}
+
+export function parseServerDebugEliminateAllResultPayload(payloadJson: string): ServerDebugEliminateAllResultPayload | null {
+  const parsed = parsePayload<ServerDebugEliminateAllResultPayload>(payloadJson)
+  if (!parsed) return null
+  if (typeof parsed.requestId !== 'string') return null
+  if (typeof parsed.matchId !== 'string') return null
+  if (parsed.outcome !== 'accepted' && parsed.outcome !== 'rejected') return null
+  if (parsed.reason !== '' && parsed.reason !== 'unauthorized' && parsed.reason !== 'missing-match' && parsed.reason !== 'match-ended') return null
+  if (typeof parsed.eliminatedCount !== 'number') return null
+  if (typeof parsed.roundOver !== 'boolean') return null
+
+  return parsed
+}
+
 export function parseServerDebugForceRoundEndRequestPayload(payloadJson: string): ServerDebugForceRoundEndRequestPayload | null {
   const parsed = parsePayload<ServerDebugForceRoundEndRequestPayload>(payloadJson)
   if (!parsed) return null
@@ -301,6 +377,28 @@ export function parseServerDebugForceRoundEndResultPayload(payloadJson: string):
   if (parsed.outcome !== 'accepted' && parsed.outcome !== 'rejected') return null
   if (typeof parsed.reason !== 'string') return null
   if (typeof parsed.roundOver !== 'boolean') return null
+
+  return parsed
+}
+
+export function parseServerDebugNpcFreezeRequestPayload(payloadJson: string): ServerDebugNpcFreezeRequestPayload | null {
+  const parsed = parsePayload<ServerDebugNpcFreezeRequestPayload>(payloadJson)
+  if (!parsed) return null
+  if (typeof parsed.requestId !== 'string') return null
+  if (typeof parsed.matchId !== 'string') return null
+  if (parsed.reason !== 'debug-toggle-npc-freeze') return null
+
+  return parsed
+}
+
+export function parseServerDebugNpcFreezeResultPayload(payloadJson: string): ServerDebugNpcFreezeResultPayload | null {
+  const parsed = parsePayload<ServerDebugNpcFreezeResultPayload>(payloadJson)
+  if (!parsed) return null
+  if (typeof parsed.requestId !== 'string') return null
+  if (typeof parsed.matchId !== 'string') return null
+  if (parsed.outcome !== 'accepted' && parsed.outcome !== 'rejected') return null
+  if (parsed.reason !== '' && parsed.reason !== 'unauthorized' && parsed.reason !== 'missing-match' && parsed.reason !== 'match-ended') return null
+  if (typeof parsed.isFrozen !== 'boolean') return null
 
   return parsed
 }

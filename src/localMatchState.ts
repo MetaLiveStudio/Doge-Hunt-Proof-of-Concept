@@ -25,6 +25,7 @@ export type PrivatePlayerState = {
   isSimulated: boolean
   publicDogeId: string
   isAlive: boolean
+  isSpectator?: boolean
   bonks: number
   turnToRock: {
     isActive: boolean
@@ -400,6 +401,7 @@ function createPrivatePlayerState(
     isSimulated: playerSlot.isSimulated,
     publicDogeId,
     isAlive: true,
+    isSpectator: false,
     bonks: 0,
     turnToRock: {
       isActive: false,

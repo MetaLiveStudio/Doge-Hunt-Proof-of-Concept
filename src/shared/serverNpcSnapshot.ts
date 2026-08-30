@@ -5,7 +5,7 @@ export type ServerNpcSnapshotEntry = {
   x: number
   z: number
   yawDegrees: number
-  action: 'walk' | 'eliminated'
+  action: ServerNpcPresentationAction | 'eliminated'
   isEliminated: boolean
   visualState: PublicDogeVisualState
 }
@@ -15,6 +15,7 @@ export type ServerNpcSnapshotPayload = {
   matchId: string
   version: number
   elapsedSeconds: number
+  isFrozen: boolean
   npcs: ServerNpcSnapshotEntry[]
 }
 
@@ -22,16 +23,27 @@ type SeededRng = {
   state: number
 }
 
+export type ServerNpcPresentationAction = 'idle' | 'walk' | 'run' | 'jump' | 'bonk'
+
+type ServerNpcActionPlan = {
+  primaryAction: ServerNpcPresentationAction
+  primaryDuration: number
+  primarySpeed: number
+}
+
 const CX = 48
 const CZ = 48
-const ARENA_HALF = 42
+const NPC_ACTIVITY_RADIUS = 36
 const WAYPOINT_COUNT = 5
 const WALK_SPEED = 6
+const RUN_SPEED = 10
+const ACTION_CYCLE_SECONDS = 3
 
 export function createServerNpcSnapshot(input: {
   matchId: string
   version: number
   elapsedSeconds: number
+  isFrozen: boolean
   publicDoges: {
     publicDogeId: string
     isEliminated: boolean
@@ -43,15 +55,20 @@ export function createServerNpcSnapshot(input: {
     matchId: input.matchId,
     version: input.version,
     elapsedSeconds: input.elapsedSeconds,
+    isFrozen: input.isFrozen,
     npcs: input.publicDoges.map((doge, index) => {
-      const transform = getDeterministicNpcTransform(doge.publicDogeId, index, input.elapsedSeconds)
+      const transform = getServerNpcTransform(doge.publicDogeId, index, input.elapsedSeconds)
 
       return {
         publicDogeId: doge.publicDogeId,
         x: transform.x,
         z: transform.z,
         yawDegrees: transform.yawDegrees,
-        action: doge.isEliminated ? 'eliminated' : 'walk',
+        action: doge.isEliminated
+          ? 'eliminated'
+          : input.isFrozen
+            ? 'idle'
+          : getServerNpcPresentationAction(doge.publicDogeId, index, input.elapsedSeconds),
         isEliminated: doge.isEliminated,
         visualState: doge.visualState,
       }
@@ -67,6 +84,7 @@ export function parseServerNpcSnapshotPayload(payloadJson: string): ServerNpcSna
     if (typeof parsed.matchId !== 'string') return null
     if (typeof parsed.version !== 'number') return null
     if (typeof parsed.elapsedSeconds !== 'number') return null
+    if (typeof parsed.isFrozen !== 'boolean') return null
     if (!Array.isArray(parsed.npcs)) return null
 
     const npcs: ServerNpcSnapshotEntry[] = []
@@ -76,7 +94,7 @@ export function parseServerNpcSnapshotPayload(payloadJson: string): ServerNpcSna
       if (typeof entry.x !== 'number') return null
       if (typeof entry.z !== 'number') return null
       if (typeof entry.yawDegrees !== 'number') return null
-      if (entry.action !== 'walk' && entry.action !== 'eliminated') return null
+      if (!isServerNpcSnapshotAction(entry.action)) return null
       if (typeof entry.isEliminated !== 'boolean') return null
       if (!isPublicDogeVisualState(entry.visualState)) return null
 
@@ -96,6 +114,7 @@ export function parseServerNpcSnapshotPayload(payloadJson: string): ServerNpcSna
       matchId: parsed.matchId,
       version: parsed.version,
       elapsedSeconds: parsed.elapsedSeconds,
+      isFrozen: parsed.isFrozen,
       npcs,
     }
   } catch (error) {
@@ -104,7 +123,7 @@ export function parseServerNpcSnapshotPayload(payloadJson: string): ServerNpcSna
   }
 }
 
-function getDeterministicNpcTransform(publicDogeId: string, fallbackId: number, elapsedSeconds: number): {
+export function getServerNpcTransform(publicDogeId: string, fallbackId: number, elapsedSeconds: number): {
   x: number
   z: number
   yawDegrees: number
@@ -117,7 +136,16 @@ function getDeterministicNpcTransform(publicDogeId: string, fallbackId: number, 
     waypoints.push(randomPoint(rng))
   }
 
-  let remainingDistance = Math.max(0, elapsedSeconds) * WALK_SPEED
+  let routeLength = 0
+  for (let i = 0; i < waypoints.length; i++) {
+    const from = waypoints[i]
+    const to = waypoints[(i + 1) % waypoints.length]
+    const dx = to.x - from.x
+    const dz = to.z - from.z
+    routeLength += Math.max(0.001, Math.sqrt(dx * dx + dz * dz))
+  }
+
+  let remainingDistance = getServerNpcTravelDistance(publicDogeId, fallbackId, elapsedSeconds) % routeLength
   for (let i = 0; i < waypoints.length; i++) {
     const from = waypoints[i]
     const to = waypoints[(i + 1) % waypoints.length]
@@ -144,10 +172,104 @@ function getDeterministicNpcTransform(publicDogeId: string, fallbackId: number, 
   }
 }
 
-function randomPoint(rng: SeededRng): { x: number; z: number } {
+export function getServerNpcPresentationAction(
+  publicDogeId: string,
+  fallbackId: number,
+  elapsedSeconds: number
+): ServerNpcPresentationAction {
+  return getServerNpcMotionState(publicDogeId, fallbackId, elapsedSeconds).action
+}
+
+function getServerNpcTravelDistance(
+  publicDogeId: string,
+  fallbackId: number,
+  elapsedSeconds: number
+): number {
+  const seed = createNpcSeed(publicDogeId, fallbackId)
+  const phaseOffset = getNpcActionPhaseOffset(seed)
+  const clampedElapsed = Math.max(0, elapsedSeconds)
+
+  return integrateNpcTravelDistance(seed, clampedElapsed + phaseOffset)
+    - integrateNpcTravelDistance(seed, phaseOffset)
+}
+
+function getServerNpcMotionState(
+  publicDogeId: string,
+  fallbackId: number,
+  elapsedSeconds: number
+): { action: ServerNpcPresentationAction; speed: number } {
+  const seed = createNpcSeed(publicDogeId, fallbackId)
+  const timeline = Math.max(0, elapsedSeconds) + getNpcActionPhaseOffset(seed)
+  const cycleIndex = Math.floor(timeline / ACTION_CYCLE_SECONDS)
+  const cycleElapsed = timeline - cycleIndex * ACTION_CYCLE_SECONDS
+  const plan = getNpcActionPlan(seed, cycleIndex)
+
+  if (cycleElapsed < plan.primaryDuration) {
+    return {
+      action: plan.primaryAction,
+      speed: plan.primarySpeed,
+    }
+  }
+
   return {
-    x: CX + (nextRandom(rng) - 0.5) * 2 * ARENA_HALF,
-    z: CZ + (nextRandom(rng) - 0.5) * 2 * ARENA_HALF,
+    action: 'walk',
+    speed: WALK_SPEED,
+  }
+}
+
+function integrateNpcTravelDistance(seed: number, timeline: number): number {
+  if (timeline <= 0) return 0
+
+  const fullCycles = Math.floor(timeline / ACTION_CYCLE_SECONDS)
+  let distance = 0
+  for (let cycleIndex = 0; cycleIndex < fullCycles; cycleIndex++) {
+    distance += getNpcActionCycleDistance(getNpcActionPlan(seed, cycleIndex), ACTION_CYCLE_SECONDS)
+  }
+
+  const partialSeconds = timeline - fullCycles * ACTION_CYCLE_SECONDS
+  distance += getNpcActionCycleDistance(getNpcActionPlan(seed, fullCycles), partialSeconds)
+  return distance
+}
+
+function getNpcActionCycleDistance(plan: ServerNpcActionPlan, duration: number): number {
+  const primarySeconds = Math.min(duration, plan.primaryDuration)
+  const walkSeconds = Math.max(0, duration - plan.primaryDuration)
+  return primarySeconds * plan.primarySpeed + walkSeconds * WALK_SPEED
+}
+
+function getNpcActionPlan(seed: number, cycleIndex: number): ServerNpcActionPlan {
+  const rng: SeededRng = {
+    state: (seed ^ Math.imul(cycleIndex + 1, 0x9e3779b9)) >>> 0,
+  }
+  const roll = nextRandom(rng)
+
+  if (roll < 0.18) {
+    return { primaryAction: 'bonk', primaryDuration: 0.75, primarySpeed: 0 }
+  }
+  if (roll < 0.4) {
+    return { primaryAction: 'jump', primaryDuration: 1, primarySpeed: WALK_SPEED }
+  }
+  if (roll < 0.55) {
+    return { primaryAction: 'idle', primaryDuration: 0.8, primarySpeed: 0 }
+  }
+  if (roll < 0.75) {
+    return { primaryAction: 'run', primaryDuration: 1.4, primarySpeed: RUN_SPEED }
+  }
+
+  return { primaryAction: 'walk', primaryDuration: ACTION_CYCLE_SECONDS, primarySpeed: WALK_SPEED }
+}
+
+function getNpcActionPhaseOffset(seed: number): number {
+  return ((seed >>> 8) % 1000) / 1000 * ACTION_CYCLE_SECONDS
+}
+
+function randomPoint(rng: SeededRng): { x: number; z: number } {
+  const angle = nextRandom(rng) * Math.PI * 2
+  const radius = Math.sqrt(nextRandom(rng)) * NPC_ACTIVITY_RADIUS
+
+  return {
+    x: CX + Math.cos(angle) * radius,
+    z: CZ + Math.sin(angle) * radius,
   }
 }
 
@@ -174,4 +296,13 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function isPublicDogeVisualState(value: unknown): value is PublicDogeVisualState {
   return value === 'doge' || value === 'rock' || value === 'eliminated'
+}
+
+function isServerNpcSnapshotAction(value: unknown): value is ServerNpcSnapshotEntry['action'] {
+  return value === 'idle'
+    || value === 'walk'
+    || value === 'run'
+    || value === 'jump'
+    || value === 'bonk'
+    || value === 'eliminated'
 }

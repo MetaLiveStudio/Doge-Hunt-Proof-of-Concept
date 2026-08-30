@@ -9,6 +9,8 @@ export type BonkRequest = {
   forward: Vector3
   candidatePublicDogeId?: string
   candidateTargetNpc?: Entity
+  aimedPlayerPublicDogeId?: string
+  aimForward?: Vector3
 }
 
 export type BonkActionStartRequest = {

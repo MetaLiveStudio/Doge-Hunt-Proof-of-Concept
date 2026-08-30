@@ -5,6 +5,9 @@ export const DogeMessages = {
   joinRoom: Schemas.Map({
     displayName: Schemas.String,
   }),
+  spectateMatch: Schemas.Map({
+    displayName: Schemas.String,
+  }),
   leaveRoom: Schemas.Map({
     reason: Schemas.String,
   }),
@@ -26,6 +29,7 @@ export const DogeMessages = {
   }),
   requestStartMatch: Schemas.Map({
     requestId: Schemas.String,
+    mode: Schemas.String,
   }),
   matchStarted: Schemas.Map({
     payloadJson: Schemas.String,
@@ -70,10 +74,22 @@ export const DogeMessages = {
   debugMarkOutResult: Schemas.Map({
     payloadJson: Schemas.String,
   }),
+  debugEliminateAllRequest: Schemas.Map({
+    payloadJson: Schemas.String,
+  }),
+  debugEliminateAllResult: Schemas.Map({
+    payloadJson: Schemas.String,
+  }),
   debugForceRoundEndRequest: Schemas.Map({
     payloadJson: Schemas.String,
   }),
   debugForceRoundEndResult: Schemas.Map({
+    payloadJson: Schemas.String,
+  }),
+  debugNpcFreezeRequest: Schemas.Map({
+    payloadJson: Schemas.String,
+  }),
+  debugNpcFreezeResult: Schemas.Map({
     payloadJson: Schemas.String,
   }),
   leaderboardPointsAwarded: Schemas.Map({

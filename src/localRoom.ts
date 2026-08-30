@@ -21,8 +21,8 @@ export type LocalRoomSnapshot = {
 }
 
 const LOCAL_PLAYER_ID = 'local-player'
-const MAX_PLAYERS = 4
-const FAKE_PLAYER_NAMES = ['Luna', 'Nova', 'Cosmo']
+const MAX_PLAYERS = 10
+const FAKE_PLAYER_NAMES = ['Luna', 'Nova', 'Cosmo', 'Stella', 'Orion', 'Milo', 'Pixel', 'Comet', 'Mochi']
 
 let phase: LocalRoomPhase = 'empty'
 let players: LocalRoomPlayer[] = []

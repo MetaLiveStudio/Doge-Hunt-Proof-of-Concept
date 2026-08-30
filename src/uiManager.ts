@@ -1,9 +1,11 @@
 /**
  * uiManager.ts — Unified UI renderer for all game screens
  */
-import ReactEcs, { ReactEcsRenderer, UiEntity, Label, Button } from '@dcl/sdk/react-ecs'
+import ReactEcs, { ReactEcsRenderer, UiEntity, Label, Button, ScreenInsetArea } from '@dcl/sdk/react-ecs'
+import { engine, PlayerIdentityData, UiCanvasInformation } from '@dcl/sdk/ecs'
 import { Color4 } from '@dcl/sdk/math'
 import { isMobile } from '@dcl/sdk/platform'
+import { getPlayer } from '@dcl/sdk/src/players'
 import { triggerPlayerBonkAttack } from './combat'
 import { triggerTurnToRock, getTurnToRockHudState } from './skills'
 import { leaveLocalRoom } from './localRoom'
@@ -15,6 +17,7 @@ import {
   requestServerMatchStart,
   requestServerRoomReady,
   requestServerRoomJoin,
+  requestServerMatchSpectate,
   requestServerRoomLeave,
   requestServerRoomSnapshot,
 } from './client/serverRoomClient'
@@ -22,16 +25,34 @@ import {
   requestServerDebugEliminateAllDoges,
   requestServerDebugForceRoundEnd,
   requestServerDebugMarkLocalOut,
+  requestServerDebugToggleNpcFreeze,
 } from './client/serverGameplayClient'
+import { areServerNpcsFrozen } from './client/serverNpcFreezeState'
 import type {
   ServerResultRevealPlayer,
   ServerResultsRevealData,
 } from './client/serverPublicStateClient'
 import { getShortAddress } from './shared/serverRoom'
+import { isDogeHuntAdmin } from './shared/leaderboardConfig'
 import { getLeaderboardAwardLabel, requestLeaderboardCsvExport } from './client/leaderboardClient'
+import {
+  getGameplayFeedback,
+  getEliminationChoiceDetail,
+  isEliminationChoicePending,
+  resolveEliminationChoice,
+} from './client/gameplayFeedback'
+import { setLocalEliminatedSpectatingMode } from './client/serverPublicStateClient'
 
 const h = ReactEcs.createElement
 const DEBUG_CONTROLS_ENABLED = true
+const PLAYER_LIST_PAGE_SIZE = 4
+const MOBILE_MODAL_LAYOUT = {
+  width: '52%',
+  height: '62%',
+  left: '7%',
+  top: '17%',
+} as const
+let lastAdminResolutionLog = ''
 
 export type GameStatsData = {
   bonks: number
@@ -43,6 +64,7 @@ export type GameStatsData = {
   isWin?: boolean
   resultTitle?: string
   resultSubtitle?: string
+  isSpectatorResult?: boolean
   revealData?: ServerResultsRevealData | null
 }
 
@@ -52,10 +74,12 @@ export type HudData = {
   total: number
   timeLeft: number
   roundOver: boolean
+  realPlayersAlive?: number | null
   serverPublicLabel?: string
   localPlayerStatus?: string
   localStatusLabel?: string
   canAct?: boolean
+  isWatcher?: boolean
 }
 
 // UI state
@@ -65,6 +89,8 @@ export const uiState = {
   showGameOver: false,
   showHud: false,
   showLeaderboardRules: false,
+  waitingRoomPage: 0,
+  resultPage: 0,
 }
 
 export function openLeaderboardRulesPopup(): void {
@@ -97,6 +123,7 @@ export function setupUI(): void {
     if (uiState.showRoomEntry && getServerRoomClientStatus() === 'joined') {
       uiState.showRoomEntry = false
       uiState.showWaitingRoom = true
+      uiState.waitingRoomPage = 0
     }
 
     if (uiState.showLeaderboardRules) {
@@ -128,6 +155,7 @@ export function setupUI(): void {
 
 /** Render local room entry UI */
 function renderRoomEntryUI() {
+  const compact = isMobile()
   const room = getServerRoomSnapshot()
   const roomStatus = getServerRoomClientStatus()
   const matchSettling = room.phase === 'settling' || roomStatus === 'settling'
@@ -145,7 +173,7 @@ function renderRoomEntryUI() {
       : roomStatus === 'joining'
         ? roomExists ? 'JOINING ROOM' : 'CREATING ROOM'
         : matchInProgress
-    ? 'GAME IN PROGRESS'
+    ? 'WATCH GAME'
     : localInRoom
     ? 'OPEN ROOM'
     : roomExists
@@ -160,11 +188,11 @@ function renderRoomEntryUI() {
       : roomStatus === 'joining'
         ? 'Sending your room request to the match server.'
         : matchInProgress
-    ? 'A match is already running. Please wait for the next round.'
+    ? 'Watch the current match. You will not join this round or affect its result.'
     : localInRoom
     ? 'You are already in this room.'
     : roomExists
-      ? `Join ${room.hostDisplayName || 'host'} ${getShortAddress(room.hostAddress)}`
+      ? `Join ${displayNameOrAddress(room.hostDisplayName, room.hostAddress)}`
       : 'Create a room to start the current match.'
 
   return h(UiEntity, {
@@ -177,48 +205,55 @@ function renderRoomEntryUI() {
       alignItems: 'center',
       justifyContent: 'center',
     },
-    uiBackground: { color: Color4.create(0, 0, 0, 0.85) },
   }, [
     h(UiEntity, {
       key: 'modal',
       uiTransform: {
-        width: 520,
-        height: 340,
+        width: compact ? MOBILE_MODAL_LAYOUT.width : 520,
+        height: compact ? MOBILE_MODAL_LAYOUT.height : 340,
+        positionType: undefined,
+        position: undefined,
         flexDirection: 'column',
         alignItems: 'center',
         justifyContent: 'center',
-        padding: { top: 30, bottom: 30, left: 40, right: 40 },
+        padding: compact
+          ? { top: 28, bottom: 28, left: 24, right: 24 }
+          : { top: 30, bottom: 30, left: 40, right: 40 },
       },
       uiBackground: { color: Color4.create(0.08, 0.08, 0.12, 0.95) },
     }, [
       h(Label, {
         key: 'title',
         value: 'DOGE HUNT ROOM',
-        fontSize: 24,
+        fontSize: compact ? 28 : 24,
         color: Color4.create(1, 0.84, 0, 1),
-        uiTransform: { height: 40, margin: { bottom: 14 } },
+        uiTransform: { height: compact ? 46 : 40, margin: { bottom: compact ? 16 : 14 } },
       }),
       h(Label, {
         key: 'status',
         value: getServerRoomStatusLabel(),
-        fontSize: 18,
+        fontSize: compact ? 21 : 18,
         color: Color4.create(0, 0.96, 1, 1),
-        uiTransform: { height: 30, margin: { bottom: 8 } },
+        uiTransform: { height: compact ? 34 : 30, margin: { bottom: compact ? 10 : 8 } },
       }),
       h(Label, {
         key: 'description',
         value: entryDescription,
-        fontSize: 15,
+        fontSize: compact ? 17 : 15,
         color: Color4.create(0.8, 0.8, 0.8, 1),
-        uiTransform: { height: 28, margin: { bottom: 24 } },
+        uiTransform: {
+          height: compact ? 'auto' : 28,
+          minHeight: compact ? 40 : undefined,
+          margin: { bottom: compact ? 28 : 24 },
+        },
       }),
       h(Button, {
         key: 'createRoom',
         value: entryActionLabel,
         variant: 'primary',
-        disabled: matchSettling || matchInProgress || roomRequestBusy,
-        uiTransform: { width: 300, height: 60, margin: { bottom: 20 } },
-        fontSize: 18,
+        disabled: matchSettling || roomRequestBusy,
+        uiTransform: { width: compact ? '82%' : 300, height: compact ? 66 : 60, margin: { bottom: compact ? 22 : 20 } },
+        fontSize: compact ? 20 : 18,
         onMouseDown: () => {
           if (serverError) {
             console.log('[UI] Retry match server clicked')
@@ -227,11 +262,16 @@ function renderRoomEntryUI() {
           }
           if (matchSettling) return
           if (roomRequestBusy) return
-          if (matchInProgress) return
+          if (matchInProgress) {
+            console.log('[UI] Watch active server match clicked')
+            requestServerMatchSpectate()
+            return
+          }
           if (localInRoom) {
             console.log('[UI] Open existing server room clicked')
             uiState.showRoomEntry = false
             uiState.showWaitingRoom = true
+            uiState.waitingRoomPage = 0
             return
           }
 
@@ -243,8 +283,8 @@ function renderRoomEntryUI() {
         key: 'cancel',
         value: 'CANCEL',
         variant: 'secondary',
-        uiTransform: { width: 200, height: 50 },
-        fontSize: 16,
+        uiTransform: { width: compact ? '62%' : 200, height: compact ? 54 : 50 },
+        fontSize: compact ? 18 : 16,
         onMouseDown: () => {
           console.log('[UI] Cancel clicked')
           if (roomRequestBusy) {
@@ -259,83 +299,112 @@ function renderRoomEntryUI() {
 
 /** Render server-owned waiting room UI */
 function renderWaitingRoomUI() {
+  const compact = isMobile()
   const room = getServerRoomSnapshot()
   const roomStatus = getServerRoomClientStatus()
   const statusLabel = getServerRoomStatusLabel()
   const localInRoom = room.isLocalPlayerInRoom
   const localIsHost = room.localPlayerIsHost
   const localIsReady = room.localPlayerIsReady
+  const isStarting = roomStatus === 'starting' || room.phase === 'starting'
   const canStartMatch = roomStatus === 'joined' && localIsHost && room.canHostStart
-  const canReady = roomStatus === 'joined' && localInRoom && !localIsHost && !localIsReady
-  const primaryButtonLabel = localIsHost
-    ? (roomStatus === 'starting' ? 'STARTING' : 'START')
-    : 'READY'
-  const primaryButtonDisabled = localIsHost
-    ? !canStartMatch
-    : !canReady
-  const startHint = roomStatus === 'starting'
-    ? 'Starting match on server'
+  const canStartSolo = roomStatus === 'joined' && localIsHost && room.canHostStartSolo
+  const canToggleReady = roomStatus === 'joined' && localInRoom
+  const primaryButtonLabel = isStarting
+    ? 'STARTING'
+    : !localIsReady
+      ? "I'M READY"
+      : localIsHost
+        ? room.playerCount === 1 ? 'PLAY SOLO' : 'START MATCH'
+        : 'UNREADY'
+  const primaryButtonDisabled = isStarting
+    || (!localIsReady && !canToggleReady)
+    || (localIsReady && localIsHost && room.playerCount === 1 && !canStartSolo)
+    || (localIsReady && localIsHost && room.playerCount > 1 && !canStartMatch)
+    || (localIsReady && !localIsHost && !canToggleReady)
+  const startHint = isStarting
+    ? room.startCountdownSeconds > 0
+      ? `Match starts in ${room.startCountdownSeconds}s`
+      : 'Starting match on server'
     : localIsHost
-      ? room.canHostStart
-        ? 'Host: ready to start'
-        : 'Host: waiting for players to be ready'
+      ? !localIsReady
+        ? 'Host: ready up before starting'
+        : room.playerCount === 1
+          ? 'Wait for players or play solo'
+          : room.canHostStart
+            ? 'Everyone is ready. Start the match when ready.'
+            : 'Waiting for every player to be ready'
       : localInRoom
         ? localIsReady
           ? 'Ready. Waiting for host to start'
-          : 'Press Ready when you are prepared'
+          : 'Press Ready and wait for host to start game'
         : statusLabel
-  const playerRows = room.players.map((player, index) => {
+  const waitingRoomPageSize = getMobileOverlayPageSize(compact)
+  const waitingRoomPageCount = Math.max(1, Math.ceil(room.players.length / waitingRoomPageSize))
+  const waitingRoomPage = Math.min(uiState.waitingRoomPage, waitingRoomPageCount - 1)
+  const waitingRoomPageStart = waitingRoomPage * waitingRoomPageSize
+  const visiblePlayers = room.players.slice(waitingRoomPageStart, waitingRoomPageStart + waitingRoomPageSize)
+  const waitingRoomRowHeight = compact ? 44 : 42
+  const waitingRoomRowGap = compact ? 5 : 8
+  const waitingRoomListHeight = visiblePlayers.length * waitingRoomRowHeight
+    + Math.max(0, visiblePlayers.length - 1) * waitingRoomRowGap
+  const playerRows = visiblePlayers.map((player, index) => {
     const isLocalPlayer = Boolean(
       room.recipientAddress &&
       player.address &&
       player.address.toLowerCase() === room.recipientAddress.toLowerCase()
     )
     const statusText = player.isHost
-      ? 'HOST'
+      ? player.isReady ? 'HOST • READY' : 'HOST • WAITING'
       : player.isSimulated
         ? 'SIM READY'
         : player.isReady
           ? 'READY'
           : 'WAITING'
     const statusColor = player.isHost
-      ? Color4.create(1, 0.84, 0, 1)
+      ? player.isReady ? Color4.create(1, 0.84, 0, 1) : Color4.create(0.8, 0.8, 0.8, 1)
       : player.isReady
         ? Color4.create(0.22, 1, 0.08, 1)
         : Color4.create(0.8, 0.8, 0.8, 1)
 
     return h(UiEntity, {
-      key: `player-${player.id}-${index}`,
+      key: `player-${player.id}-${waitingRoomPageStart + index}`,
       uiTransform: {
         width: '100%',
-        height: 42,
+        height: waitingRoomRowHeight,
         flexDirection: 'row',
         alignItems: 'center',
         justifyContent: 'space-between',
-        padding: { left: 18, right: 18 },
-        margin: { bottom: 8 },
+        padding: compact ? { left: 14, right: 14 } : { left: 18, right: 18 },
+        margin: { bottom: index < waitingRoomPageSize - 1 ? waitingRoomRowGap : 0 },
       },
       uiBackground: { color: Color4.create(0.12, 0.12, 0.18, 0.95) },
     }, [
       h(Label, {
+        key: 'rank',
+        value: `#${waitingRoomPageStart + index + 1}`,
+        fontSize: compact ? 15 : 13,
+        color: player.isHost ? Color4.create(1, 0.84, 0, 1) : Color4.create(0.85, 0.85, 0.85, 1),
+        textAlign: 'middle-left',
+        uiTransform: { width: compact ? '8%' : 42, height: waitingRoomRowHeight },
+      }),
+      h(Label, {
         key: 'name',
-        value: player.address
-          ? `${isLocalPlayer ? 'You' : player.displayName} ${getShortAddress(player.address)}`
-          : `${isLocalPlayer ? 'You' : player.displayName}`,
-        fontSize: 16,
+        value: waitingRoomPlayerLabel(player.displayName, player.address),
+        fontSize: compact ? 18 : 16,
         color: Color4.White(),
-        uiTransform: { width: 220, height: 28 },
+        uiTransform: { width: compact ? '54%' : 220, height: waitingRoomRowHeight, overflow: 'hidden' },
       }),
       h(Label, {
         key: 'status',
         value: statusText,
-        fontSize: 14,
+        fontSize: compact ? 16 : 14,
         color: statusColor,
         textAlign: 'middle-right',
-        uiTransform: { width: 120, height: 28 },
+        uiTransform: { width: compact ? '30%' : 120, height: waitingRoomRowHeight, overflow: 'hidden' },
       }),
     ])
   })
-
   return h(UiEntity, {
     uiTransform: {
       width: '100%',
@@ -346,107 +415,147 @@ function renderWaitingRoomUI() {
       alignItems: 'center',
       justifyContent: 'center',
     },
-    uiBackground: { color: Color4.create(0, 0, 0, 0.85) },
   }, [
     h(UiEntity, {
       key: 'modal',
       uiTransform: {
-        width: 600,
-        height: 590,
+        width: compact ? MOBILE_MODAL_LAYOUT.width : 600,
+        height: 'auto',
+        minHeight: compact ? 300 : 340,
+        positionType: undefined,
+        position: undefined,
         flexDirection: 'column',
         alignItems: 'center',
-        justifyContent: 'center',
-        padding: { top: 28, bottom: 28, left: 40, right: 40 },
+        justifyContent: compact ? 'flex-start' : 'center',
+        padding: compact
+          ? { top: 16, bottom: 16, left: 20, right: 20 }
+          : { top: 28, bottom: 28, left: 40, right: 40 },
       },
       uiBackground: { color: Color4.create(0.08, 0.08, 0.12, 0.95) },
     }, [
-      h(Label, {
+      h(UiEntity, {
+        key: 'titleBlock',
+        uiTransform: {
+          width: '100%',
+          height: compact ? 52 : 38,
+          margin: { bottom: compact ? 12 : 8 },
+          justifyContent: 'center',
+        },
+      }, [h(Label, {
         key: 'title',
-        value: 'WAITING ROOM',
-        fontSize: 24,
-        color: Color4.create(1, 0.84, 0, 1),
-        uiTransform: { height: 38, margin: { bottom: 8 } },
-      }),
-      h(Label, {
-        key: 'players',
         value: roomStatus === 'joined'
-          ? `Players ${room.playerCount}/${room.maxPlayers}`
-          : statusLabel,
-        fontSize: 20,
-        color: Color4.create(0, 0.96, 1, 1),
-        uiTransform: { height: 32, margin: { bottom: 8 } },
-      }),
-      h(Label, {
-        key: 'host',
-        value: room.hostDisplayName
-          ? `Host: ${room.hostDisplayName} ${getShortAddress(room.hostAddress)}`
-          : 'Host: waiting for server',
-        fontSize: 14,
-        color: Color4.create(0.8, 0.8, 0.8, 1),
-        uiTransform: { height: 24, margin: { bottom: 16 } },
-      }),
+          ? `WAITING ROOM (${room.playerCount}/${room.maxPlayers})`
+          : 'WAITING ROOM',
+        fontSize: compact ? 28 : 24,
+        color: Color4.create(1, 0.84, 0, 1),
+        textAlign: 'middle-center',
+        uiTransform: { width: '100%', height: compact ? 40 : 38 },
+      })]),
       h(UiEntity, {
         key: 'playerList',
         uiTransform: {
           width: '100%',
-          height: 200,
+          height: Math.max(waitingRoomRowHeight, waitingRoomListHeight),
           flexDirection: 'column',
-          margin: { bottom: 16 },
+          margin: { bottom: compact ? 6 : 16 },
         },
       }, playerRows),
+      ...(compact || waitingRoomPageCount > 1 ? [renderPlayerListPager(
+        'waitingRoomPager',
+        waitingRoomPage,
+        waitingRoomPageCount,
+        (page) => { uiState.waitingRoomPage = page },
+        compact
+      )] : []),
       h(Label, {
         key: 'serverStatus',
-        value: statusLabel,
-        fontSize: 14,
+        value: startHint,
+        fontSize: compact ? 18 : 14,
         color: roomStatus === 'error'
           ? Color4.create(1, 0.2, 0.2, 1)
-          : Color4.create(0.22, 1, 0.08, 1),
-        uiTransform: { height: 28, margin: { bottom: 8 } },
+          : localInRoom
+            ? Color4.create(0.22, 1, 0.08, 1)
+            : Color4.create(0.8, 0.8, 0.8, 1),
+        textAlign: 'middle-center',
+        uiTransform: { width: '100%', height: compact ? 'auto' : 28, minHeight: compact ? 32 : undefined, margin: { bottom: 8 } },
       }),
-      h(Label, {
-        key: 'startHint',
-        value: startHint,
-        fontSize: 14,
-        color: localIsHost
-          ? Color4.create(0.22, 1, 0.08, 1)
-          : Color4.create(0.8, 0.8, 0.8, 1),
-        uiTransform: { height: 28, margin: { bottom: 10 } },
-      }),
-      h(Button, {
-        key: 'start',
-        value: primaryButtonLabel,
-        variant: 'primary',
-        disabled: primaryButtonDisabled,
-        uiTransform: { width: 300, height: 58, margin: { bottom: 14 } },
-        fontSize: 18,
-        onMouseDown: () => {
-          if (localIsHost) {
-            if (!canStartMatch) return
-            console.log('[UI] Request server match start clicked')
-            requestServerMatchStart()
-            return
-          }
+      h(UiEntity, {
+        key: 'waitingRoomActions',
+        uiTransform: {
+          width: '100%',
+          height: compact ? 58 : 58,
+          flexDirection: 'row',
+          alignItems: 'center',
+          justifyContent: 'center',
+        },
+      }, [
+        h(Button, {
+          key: 'start',
+          value: primaryButtonLabel,
+          variant: 'primary',
+          disabled: primaryButtonDisabled,
+          uiTransform: { width: compact ? '44%' : '48%', height: 58, margin: { right: 8 } },
+          fontSize: compact ? 18 : 18,
+          onMouseDown: () => {
+            if (isStarting) return
+            if (!localIsReady) {
+              if (!canToggleReady) return
+              console.log('[UI] Server room ready toggle clicked nextReady=true')
+              requestServerRoomReady(true)
+              return
+            }
 
-          if (!canReady) return
-          console.log('[UI] Ready server room clicked')
-          requestServerRoomReady(true)
-        },
-      }),
-      h(Button, {
-        key: 'leave',
-        value: 'LEAVE',
-        variant: 'secondary',
-        uiTransform: { width: 220, height: 50 },
-        fontSize: 16,
-        onMouseDown: () => {
-          console.log('[UI] Leave server room clicked')
-          requestServerRoomLeave()
-          leaveLocalRoom()
-          uiState.showWaitingRoom = false
-        },
-      }),
+            if (localIsHost) {
+              const mode = room.playerCount === 1 ? 'solo' : 'party'
+              if (mode === 'solo' && !canStartSolo) return
+              if (mode === 'party' && !canStartMatch) return
+              console.log(`[UI] Request server match start clicked mode=${mode}`)
+              requestServerMatchStart(mode)
+              return
+            }
+
+            if (!canToggleReady) return
+            console.log('[UI] Server room ready toggle clicked nextReady=false')
+            requestServerRoomReady(false)
+          },
+        }),
+        h(Button, {
+          key: 'leave',
+          value: isStarting ? 'CANCEL' : 'LEAVE',
+          variant: 'secondary',
+          uiTransform: { width: compact ? '44%' : '48%', height: 58 },
+          fontSize: compact ? 18 : 16,
+          onMouseDown: () => {
+            console.log(isStarting ? '[UI] Match countdown cancelled locally' : '[UI] Leave server room clicked')
+            requestServerRoomLeave(isStarting ? 'match-countdown-cancelled' : 'ui-leave')
+            leaveLocalRoom()
+            uiState.showWaitingRoom = false
+            uiState.waitingRoomPage = 0
+          },
+        }),
+      ]),
     ]),
   ])
+}
+
+function getMobileOverlayPageSize(compact: boolean): number {
+  if (!compact) return PLAYER_LIST_PAGE_SIZE
+
+  const reportedHeight = UiCanvasInformation.getOrNull(engine.RootEntity)?.height ?? 0
+  if (reportedHeight > 0 && reportedHeight <= 560) return 2
+  if (reportedHeight > 0 && reportedHeight <= 660) return 3
+
+  return PLAYER_LIST_PAGE_SIZE
+}
+
+function getResultResponsiveLayout(compact: boolean): {
+  pageSize: number
+  showLeaderboardAward: boolean
+} {
+  const pageSize = getMobileOverlayPageSize(compact)
+  if (!compact) return { pageSize, showLeaderboardAward: true }
+
+  return { pageSize, showLeaderboardAward: pageSize > 2 }
 }
 
 /** Render game over UI */
@@ -455,23 +564,30 @@ function renderGameOverUI() {
     ? getGameStats()
     : { bonks: 0, alive: 0, total: 11, time: '0:00', identityRevealLines: [], localStatusLabel: 'ACTIVE' }
   const isWin = stats.isWin ?? stats.alive === 0
-  const titleText = stats.resultTitle ?? (isWin ? 'Round Complete' : 'GAME OVER')
-  const subtitleText = stats.resultSubtitle ?? (isWin ? 'You Win' : 'You Lose')
   const localStatus = stats.localStatusLabel ?? 'ACTIVE'
-  const resultStatus = getResultStatusLabel(localStatus)
-  const reasonText = revealDataReasonLabel(stats.revealData, titleText)
-  const showReason = reasonText.toLowerCase() !== subtitleText.toLowerCase()
-  const outcomeLabel = isWin
-    ? 'VICTORY'
-    : localStatus === 'OUT' || localStatus === 'SPECTATING'
-      ? 'ELIMINATED'
-      : 'ROUND OVER'
-  const titleColor = isWin ? Color4.create(0.22, 1, 0.08, 1) : Color4.create(1, 0.2, 0.2, 1)
+  const isSpectatorResult = stats.isSpectatorResult === true
+  const outcomeLabel = isSpectatorResult
+    ? 'ROUND FINISHED'
+    : isWin
+      ? 'VICTORY'
+      : localStatus === 'OUT' || localStatus === 'SPECTATING'
+        ? 'ELIMINATED'
+        : 'ROUND OVER'
+  const titleColor = isSpectatorResult
+    ? Color4.create(0, 0.96, 1, 1)
+    : isWin ? Color4.create(0.22, 1, 0.08, 1) : Color4.create(1, 0.2, 0.2, 1)
+  const desktopTitleBottomGap = isSpectatorResult ? 28 : 18
   const revealData = stats.revealData ?? null
   const revealLines = stats.identityRevealLines ?? []
   const room = getServerRoomSnapshot()
   const compactResultLayout = isMobile()
-  const resultScale = compactResultLayout ? 0.7 : 1
+  const resultLayout = getResultResponsiveLayout(compactResultLayout)
+  const resultPageSize = resultLayout.pageSize
+  const visibleFallbackLines = revealLines.slice(0, compactResultLayout ? resultPageSize : 5)
+  const resultPageCount = Math.max(1, Math.ceil((revealData?.players.length ?? 0) / resultPageSize))
+  const resultPage = Math.min(uiState.resultPage, resultPageCount - 1)
+  const resultPageStart = resultPage * resultPageSize
+  const resultScale = 1
   const rs = (value: number) => Math.round(value * resultScale)
   const roomCloseSeconds = room.phase === 'settling'
     ? Math.ceil(room.settlingSecondsRemaining)
@@ -480,10 +596,19 @@ function renderGameOverUI() {
     ? `Room closes in ${roomCloseSeconds}s`
     : ''
   const leaderboardLabel = getLeaderboardAwardLabel()
+  const showLeaderboardAward = Boolean(leaderboardLabel) && resultLayout.showLeaderboardAward
+  const localEliminationDetail = !isSpectatorResult
+    ? revealData?.localEliminationDetail ?? ''
+    : ''
+  const visibleResultPlayers = revealData?.players.slice(resultPageStart, resultPageStart + resultPageSize) ?? []
+  const resultPlayerRows = visibleResultPlayers.map((player, index) =>
+    renderResultPlayerRow(player, resultPageStart + index, compactResultLayout, resultScale)
+  )
   const handleReturnToLobby = () => {
     console.log('[UI] Return to Lobby button clicked')
     console.log('[UI] onReturnToLobby exists?', !!onReturnToLobby)
     uiState.showGameOver = false
+    uiState.resultPage = 0
 
     if (onReturnToLobby) {
       console.log('[UI] Calling onReturnToLobby...')
@@ -505,26 +630,17 @@ function renderGameOverUI() {
     },
   }, [
     h(UiEntity, {
-      key: 'gameOverBackdrop',
-      uiTransform: {
-        width: '100%',
-        height: '100%',
-        positionType: 'absolute',
-        position: { left: 0, top: 0 },
-        zIndex: 0,
-      },
-      uiBackground: { color: Color4.create(0, 0, 0, 0.78) },
-    }),
-    h(UiEntity, {
       key: 'gameOverModal',
       uiTransform: {
-        width: compactResultLayout ? '64.4%' : 600,
-        height: compactResultLayout ? '61.6%' : 620,
+        width: compactResultLayout ? MOBILE_MODAL_LAYOUT.width : 640,
+        height: 'auto',
+        positionType: undefined,
+        position: undefined,
         flexDirection: 'column',
         alignItems: 'center',
         justifyContent: 'flex-start',
         padding: compactResultLayout
-          ? { top: rs(14), bottom: rs(14), left: rs(14), right: rs(14) }
+          ? { top: rs(12), bottom: rs(12), left: rs(14), right: rs(14) }
           : { top: 24, bottom: 24, left: 30, right: 30 },
         zIndex: 1,
       },
@@ -533,84 +649,62 @@ function renderGameOverUI() {
       h(Label, {
         key: 'title',
         value: outcomeLabel,
-        fontSize: compactResultLayout ? rs(24) : 34,
+        fontSize: compactResultLayout ? 32 : 36,
         color: titleColor,
-        textAlign: 'middle-center',
-        uiTransform: { width: '100%', height: compactResultLayout ? rs(30) : 40 },
-      }),
-      h(Label, {
-        key: 'subtitle',
-        value: subtitleText,
-        fontSize: compactResultLayout ? rs(14) : 18,
-        color: Color4.create(1, 0.84, 0, 1),
-        textAlign: 'middle-center',
-        uiTransform: { width: '100%', height: compactResultLayout ? rs(22) : 26 },
-      }),
-      h(Label, {
-        key: 'reason',
-        value: showReason ? `Reason: ${reasonText}` : '',
-        fontSize: compactResultLayout ? rs(11) : 14,
-        color: Color4.create(0.82, 0.82, 0.86, 1),
         textAlign: 'middle-center',
         uiTransform: {
           width: '100%',
-          height: showReason ? compactResultLayout ? rs(18) : 22 : 6,
-          margin: { bottom: compactResultLayout ? rs(6) : 10 },
+          height: compactResultLayout ? 40 : 40,
+          margin: { bottom: compactResultLayout ? 0 : desktopTitleBottomGap },
         },
       }),
       h(Label, {
         key: 'leaderboardAward',
         value: leaderboardLabel,
-        fontSize: compactResultLayout ? rs(12) : 15,
+        fontSize: compactResultLayout ? 16 : 15,
         color: Color4.create(0.35, 1, 0.45, 1),
         textAlign: 'middle-center',
         uiTransform: {
           width: '100%',
-          height: leaderboardLabel ? compactResultLayout ? rs(20) : 24 : 0,
-          margin: { bottom: leaderboardLabel ? compactResultLayout ? rs(6) : 8 : 0 },
+          height: showLeaderboardAward ? compactResultLayout ? 22 : 24 : 0,
+          margin: { bottom: showLeaderboardAward ? compactResultLayout ? 4 : 14 : 0 },
         },
       }),
-      h(UiEntity, {
+      ...(localEliminationDetail ? [h(Label, {
+        key: 'localEliminationDetail',
+        value: localEliminationDetail,
+        fontSize: compactResultLayout ? 16 : 15,
+        color: Color4.create(1, 0.45, 0.45, 1),
+        textAlign: 'middle-center',
+        uiTransform: {
+          width: '100%',
+          height: 22,
+          margin: { bottom: compactResultLayout ? 4 : 10 },
+        },
+      })] : []),
+      ...(!compactResultLayout ? [h(UiEntity, {
         key: 'statsRow',
         uiTransform: {
           width: '100%',
-          height: compactResultLayout ? rs(54) : 66,
+          height: 66,
           flexDirection: 'row',
           justifyContent: 'space-between',
-          margin: { bottom: compactResultLayout ? rs(8) : 12 },
+          margin: { bottom: 12 },
         },
       }, [
-        renderResultStatBox('statStatus', 'YOUR STATUS', resultStatus, titleColor, compactResultLayout, resultScale),
-        renderResultStatBox('statBonks', 'BONKS', `${stats.bonks}`, Color4.create(0, 0.96, 1, 1), compactResultLayout, resultScale),
-        renderResultStatBox('statTime', 'TIME', stats.time, Color4.create(1, 0.84, 0, 1), compactResultLayout, resultScale),
-      ]),
-      h(Label, {
-        key: 'revealTitle',
-        value: 'FINAL REVEAL',
-        fontSize: compactResultLayout ? rs(15) : 18,
-        color: Color4.create(1, 0.84, 0, 1),
-        textAlign: 'middle-center',
-        uiTransform: { width: '100%', height: compactResultLayout ? rs(20) : 24, margin: { bottom: compactResultLayout ? rs(2) : 2 } },
-      }),
-      h(Label, {
-        key: 'winner',
-        value: revealData ? `Winner: ${revealData.winnerLabel}` : 'Winner: pending',
-        fontSize: compactResultLayout ? rs(12) : 14,
-        color: Color4.create(0.85, 0.85, 0.9, 1),
-        textAlign: 'middle-center',
-        uiTransform: { width: '100%', height: compactResultLayout ? rs(18) : 22, margin: { bottom: compactResultLayout ? rs(4) : 6 } },
-      }),
+        renderResultStatBox('statBonks', 'BONKS', `${stats.bonks}`, Color4.create(0, 0.96, 1, 1), false, resultScale),
+        renderResultStatBox('statTime', 'TIME', stats.time, Color4.create(1, 0.84, 0, 1), false, resultScale),
+      ])] : []),
       ...(revealData ? [
-        ...revealData.players.slice(0, 4).map((player, index) => renderResultPlayerRow(player, index, compactResultLayout, resultScale)),
-        h(Label, {
-          key: 'decoySummary',
-          value: `Decoys: ${revealData.decoyEliminated} eliminated, ${revealData.decoyAlive} survived`,
-          fontSize: compactResultLayout ? rs(10) : 13,
-          color: Color4.create(0.82, 0.82, 0.86, 1),
-          textAlign: 'middle-center',
-          uiTransform: { width: '100%', height: compactResultLayout ? rs(16) : 20, margin: { top: 0, bottom: compactResultLayout ? rs(4) : 8 } },
-        }),
-      ] : revealLines.length > 0 ? [
+        ...resultPlayerRows,
+        renderPlayerListPager(
+          'resultPager',
+          resultPage,
+          resultPageCount,
+          (page) => { uiState.resultPage = page },
+          compactResultLayout
+        ),
+      ] : visibleFallbackLines.length > 0 ? [
         h(Label, {
           key: 'fallbackRevealTitle',
           value: 'Match details',
@@ -619,7 +713,7 @@ function renderGameOverUI() {
           textAlign: 'middle-center',
           uiTransform: { width: '100%', height: rs(20) },
         }),
-        ...revealLines.slice(0, 5).map((line, index) => h(Label, {
+        ...visibleFallbackLines.map((line, index) => h(Label, {
           key: `reveal-${index}`,
           value: line,
           fontSize: rs(13),
@@ -628,37 +722,37 @@ function renderGameOverUI() {
           uiTransform: {
             width: '100%',
             height: rs(18),
-            margin: { bottom: index === Math.min(revealLines.length, 5) - 1 ? rs(8) : rs(2) },
+            margin: { bottom: index === visibleFallbackLines.length - 1 ? rs(8) : rs(2) },
           },
         })),
       ] : []),
-      h(Label, {
+      ...(!compactResultLayout && roomCloseLabel ? [h(Label, {
         key: 'roomCloseCountdown',
         value: roomCloseLabel,
-        fontSize: compactResultLayout ? rs(11) : 13,
+        fontSize: 13,
         color: Color4.create(0.85, 0.85, 0.9, 1),
         textAlign: 'middle-center',
         uiTransform: {
           width: '100%',
-          height: compactResultLayout ? rs(18) : 22,
-          positionType: 'absolute',
-          position: { bottom: compactResultLayout ? rs(72) : 84 },
+          height: 22,
+          margin: { bottom: 8 },
         },
-      }),
+      })] : []),
       h(UiEntity, {
         key: 'returnBtn',
         uiTransform: {
-          width: compactResultLayout ? '82%' : 320,
-          height: compactResultLayout ? rs(46) : 52,
-          positionType: 'absolute',
-          position: { bottom: compactResultLayout ? rs(18) : 24 },
+          width: compactResultLayout ? '86%' : 340,
+          height: compactResultLayout ? 52 : 52,
+          margin: { top: compactResultLayout ? 8 : 12 },
           alignItems: 'center',
           justifyContent: 'center',
         },
         uiBackground: { color: Color4.create(1, 0.2, 0.45, 1) },
         uiText: {
-          value: 'RETURN TO LOBBY',
-          fontSize: compactResultLayout ? rs(14) : 18,
+          value: compactResultLayout && roomCloseSeconds > 0
+            ? `RETURN TO LOBBY (${roomCloseSeconds}s)`
+            : 'RETURN TO LOBBY',
+          fontSize: compactResultLayout ? 17 : 18,
           color: Color4.create(1, 1, 1, 1),
           textAlign: 'middle-center',
         },
@@ -668,28 +762,19 @@ function renderGameOverUI() {
   ])
 }
 
-function getResultStatusLabel(status: string): string {
-  if (status === 'SPECTATING' || status === 'OUT') return 'ELIMINATED'
-  return status
-}
-
-function revealDataReasonLabel(revealData: ServerResultsRevealData | null | undefined, fallback: string): string {
-  return revealData?.endReasonLabel ?? fallback
-}
-
 function renderResultStatBox(key: string, label: string, value: string, valueColor: Color4, compact = false, scale = 1) {
   const rs = (size: number) => Math.round(size * scale)
 
   return h(UiEntity, {
     key,
     uiTransform: {
-      width: compact ? '31%' : 172,
-      height: compact ? rs(54) : 66,
+      width: compact ? '46%' : 250,
+      height: compact ? 64 : 66,
       flexDirection: 'column',
       alignItems: 'center',
       justifyContent: 'center',
       padding: compact
-        ? { top: rs(4), bottom: rs(4), left: rs(4), right: rs(4) }
+        ? { top: 4, bottom: 4, left: 6, right: 6 }
         : { top: 6, bottom: 6, left: 8, right: 8 },
     },
     uiBackground: { color: Color4.create(0.12, 0.12, 0.18, 0.92) },
@@ -697,24 +782,30 @@ function renderResultStatBox(key: string, label: string, value: string, valueCol
     h(Label, {
       key: 'label',
       value: label,
-      fontSize: compact ? rs(8) : 11,
+      fontSize: compact ? 12 : 11,
       color: Color4.create(0.75, 0.75, 0.8, 1),
       textAlign: 'middle-center',
-      uiTransform: { width: '100%', height: compact ? rs(16) : 18 },
+      uiTransform: { width: '100%', height: compact ? 20 : 18 },
     }),
     h(Label, {
       key: 'value',
       value,
-      fontSize: compact ? rs(12) : 16,
+      fontSize: compact ? 19 : 16,
       color: valueColor,
       textAlign: 'middle-center',
-      uiTransform: { width: '100%', height: compact ? rs(24) : 30 },
+      uiTransform: { width: '100%', height: compact ? 30 : 30 },
     }),
   ])
 }
 
-function renderResultPlayerRow(player: ServerResultRevealPlayer, index: number, compact = false, scale = 1) {
+function renderResultPlayerRow(
+  player: ServerResultRevealPlayer,
+  index: number,
+  compact = false,
+  scale = 1
+) {
   const rs = (size: number) => Math.round(size * scale)
+  const rowHeight = compact ? 44 : 34
   const statusColor = player.isWinner
     ? Color4.create(1, 0.84, 0, 1)
     : player.statusLabel === 'SURVIVED'
@@ -723,7 +814,7 @@ function renderResultPlayerRow(player: ServerResultRevealPlayer, index: number, 
   const rowColor = player.isLocal
     ? Color4.create(0.13, 0.18, 0.26, 0.95)
     : Color4.create(0.12, 0.12, 0.18, 0.85)
-  const name = `${player.displayName} ${player.shortAddress}`
+  const name = player.displayName || player.shortAddress
   const compactName = player.displayName.length > 12
     ? `${player.displayName.slice(0, 12)}...`
     : player.displayName
@@ -732,62 +823,59 @@ function renderResultPlayerRow(player: ServerResultRevealPlayer, index: number, 
     key: `resultPlayer-${index}`,
     uiTransform: {
       width: '100%',
-      height: compact ? rs(42) : 34,
+      height: rowHeight,
       flexDirection: 'row',
       alignItems: 'center',
       justifyContent: 'space-between',
-      padding: compact ? { left: rs(8), right: rs(8) } : { left: 14, right: 14 },
-      margin: { bottom: compact ? rs(3) : 4 },
+      padding: compact ? { left: 10, right: 10 } : { left: 14, right: 14 },
+      margin: { bottom: 4 },
     },
     uiBackground: { color: rowColor },
   }, compact ? [
     h(Label, {
       key: 'rank',
       value: `#${player.rank}`,
-      fontSize: rs(11),
+      fontSize: 15,
       color: player.isWinner ? Color4.create(1, 0.84, 0, 1) : Color4.create(0.85, 0.85, 0.85, 1),
       textAlign: 'middle-left',
-      uiTransform: { width: rs(28), height: rs(22) },
+      uiTransform: { width: '7%', height: rowHeight },
     }),
     h(UiEntity, {
       key: 'nameCol',
       uiTransform: {
-        width: rs(120),
-        height: rs(34),
+        width: '34%',
+        height: rowHeight,
         flexDirection: 'column',
         justifyContent: 'center',
       },
     }, [
       h(Label, {
         key: 'name',
-        value: `${compactName} ${player.shortAddress}`,
-        fontSize: rs(11),
+        value: compactName,
+        fontSize: 15,
         color: Color4.White(),
-        uiTransform: { width: '100%', height: rs(17) },
-      }),
-      h(Label, {
-        key: 'doge',
-        value: player.dogeLabel,
-        fontSize: rs(10),
-        color: Color4.create(0, 0.96, 1, 1),
-        uiTransform: { width: '100%', height: rs(15) },
+        uiTransform: { width: '100%', height: 21, overflow: 'hidden' },
       }),
     ]),
     h(Label, {
       key: 'bonks',
-      value: `${player.bonks}`,
-      fontSize: rs(11),
+      value: `${player.bonks} Bonks`,
+      fontSize: 14,
       color: Color4.create(0.85, 0.85, 0.85, 1),
       textAlign: 'middle-center',
-      uiTransform: { width: rs(42), height: rs(22) },
+      uiTransform: { width: '23%', height: rowHeight, overflow: 'hidden' },
+    }),
+    h(UiEntity, {
+      key: 'reticleGutter',
+      uiTransform: { width: '7%', height: rowHeight },
     }),
     h(Label, {
       key: 'status',
       value: player.statusLabel,
-      fontSize: rs(10),
+      fontSize: 13,
       color: statusColor,
       textAlign: 'middle-right',
-      uiTransform: { width: rs(66), height: rs(22) },
+      uiTransform: { width: '29%', height: rowHeight },
     }),
   ] : [
     h(Label, {
@@ -803,19 +891,11 @@ function renderResultPlayerRow(player: ServerResultRevealPlayer, index: number, 
       value: name,
       fontSize: 13,
       color: Color4.White(),
-      uiTransform: { width: 166, height: 24 },
-    }),
-    h(Label, {
-      key: 'doge',
-      value: player.dogeLabel,
-      fontSize: 13,
-      color: Color4.create(0, 0.96, 1, 1),
-      textAlign: 'middle-center',
-      uiTransform: { width: 90, height: 24 },
+      uiTransform: { width: 166, height: 24, overflow: 'hidden' },
     }),
     h(Label, {
       key: 'bonks',
-      value: `${player.bonks} bonks`,
+      value: `${player.bonks} Bonks`,
       fontSize: 12,
       color: Color4.create(0.85, 0.85, 0.85, 1),
       textAlign: 'middle-center',
@@ -834,27 +914,113 @@ function renderResultPlayerRow(player: ServerResultRevealPlayer, index: number, 
 
 function renderLobbyHowToUI() {
   const compact = isMobile()
+  const canExportLeaderboard = isLeaderboardExportAdmin()
   const width = compact ? 320 : 560
-  const height = compact ? 286 : 370
-  const left = compact ? 16 : 50
-  const top = '50%'
-  const marginTop = compact ? -143 : -215
   const scale = compact ? 1 : 1.35
   const s = (n: number) => Math.round(n * scale)
-  const panelPosition: { left?: number; top?: string; right?: number; bottom?: number } = compact
-    ? { left, top }
+  const panelPosition: { left?: number; top?: string; right?: number; bottom?: number | string } = compact
+    ? { right: 104, bottom: '38%' }
     : { right: 34, bottom: 34 }
-  const panelMargin = compact ? { top: marginTop } : { top: 0 }
-  const titleFontSize = compact ? 19 : s(22)
-  const bodyFontSize = compact ? 13 : s(15)
+  const panelMargin = { top: 0 }
+  const titleFontSize = compact ? 21 : s(22)
+  const bodyFontSize = compact ? 15 : s(15)
   const titleHeight = compact ? 26 : s(30)
-  const lineHeight = compact ? 21 : s(24)
-  const sectionGap = compact ? 9 : s(14)
+  const lineGap = compact ? 6 : s(6)
 
   const GOLD = Color4.create(1, 0.84, 0, 1)
   const PINK = Color4.create(1, 0.18, 0.59, 1)
   const WHITE = Color4.create(0.86, 0.86, 0.9, 1)
-  const CYAN = Color4.create(0, 0.96, 1, 1)
+
+  const panel = h(UiEntity, {
+    key: 'lobbyHowToPanel',
+    uiTransform: {
+      width,
+      height: 'auto',
+      positionType: 'absolute',
+      position: panelPosition,
+      margin: panelMargin,
+      flexDirection: 'column',
+      padding: {
+        top: s(16),
+        bottom: s(16),
+        left: s(18),
+        right: s(18),
+      },
+    },
+    uiBackground: { color: Color4.create(0, 0, 0, 0.9) },
+  }, [
+    h(Label, {
+      key: 'title',
+      value: 'HOW TO PLAY',
+      fontSize: titleFontSize,
+      color: PINK,
+      textAlign: 'middle-left',
+      uiTransform: { width: '100%', height: titleHeight, margin: { bottom: compact ? 8 : s(10) } },
+    }),
+    h(Label, {
+      key: 'rule1',
+      value: 'Click the Doge head to create or join a room.',
+      fontSize: bodyFontSize,
+      color: WHITE,
+      textAlign: 'middle-left',
+      uiTransform: { width: '100%', height: 'auto', margin: { bottom: lineGap } },
+    }),
+    h(Label, {
+      key: 'rule2',
+      value: 'Ready up, then host starts the game.',
+      fontSize: bodyFontSize,
+      color: WHITE,
+      textAlign: 'middle-left',
+      uiTransform: { width: '100%', height: 'auto', margin: { bottom: lineGap } },
+    }),
+    h(Label, {
+      key: 'rule3',
+      value: 'All Doges look identical.',
+      fontSize: bodyFontSize,
+      color: WHITE,
+      textAlign: 'middle-left',
+      uiTransform: { width: '100%', height: 'auto', margin: { bottom: lineGap } },
+    }),
+    h(Label, {
+      key: 'rule4',
+      value: 'BONK suspicious Doges to eliminate real players.',
+      fontSize: bodyFontSize,
+      color: WHITE,
+      textAlign: 'middle-left',
+      uiTransform: { width: '100%', height: 'auto', margin: { bottom: lineGap } },
+    }),
+    h(Label, {
+      key: 'rule5',
+      value: 'Win: last real player standing.',
+      fontSize: bodyFontSize,
+      color: GOLD,
+      textAlign: 'middle-left',
+      uiTransform: { width: '100%', height: 'auto', margin: { bottom: lineGap } },
+    }),
+    ...(canExportLeaderboard ? [
+      h(Button, {
+        key: 'exportLeaderboardBtn',
+        value: 'EXPORT CSV',
+        variant: 'secondary',
+        uiTransform: {
+          width: compact ? 102 : s(128),
+          height: compact ? 30 : s(30),
+          alignSelf: compact ? 'flex-start' : 'center',
+        },
+        fontSize: compact ? 11 : s(11),
+        onMouseDown: () => {
+          requestLeaderboardCsvExport()
+        },
+      }),
+    ] : []),
+  ])
+
+  if (compact) {
+    return h(ScreenInsetArea, {
+      key: 'lobbyHowToSafeArea',
+      uiTransform: { width: '100%', height: '100%' },
+    }, [panel])
+  }
 
   return h(UiEntity, {
     key: 'lobbyHowToRoot',
@@ -864,90 +1030,116 @@ function renderLobbyHowToUI() {
       positionType: 'absolute',
       position: { left: 0, top: 0 },
     },
-  }, [
+  }, [panel])
+}
+
+function renderPlayerListPager(
+  key: string,
+  currentPage: number,
+  pageCount: number,
+  onPageChange: (page: number) => void,
+  compact: boolean
+) {
+  const showPager = compact || pageCount > 1
+  const controlWidth = compact ? 38 : 34
+
+  return h(UiEntity, {
+    key,
+    uiTransform: {
+      width: '100%',
+      height: compact ? 38 : 32,
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'center',
+      margin: { bottom: compact ? 8 : 8 },
+    },
+  }, showPager ? [
     h(UiEntity, {
-      key: 'lobbyHowToPanel',
+      key: 'previous',
       uiTransform: {
-        width,
-        height,
-        positionType: 'absolute',
-        position: panelPosition,
-        margin: panelMargin,
-        flexDirection: 'column',
-        padding: {
-          top: s(16),
-          bottom: s(16),
-          left: s(18),
-          right: s(18),
-        },
+        width: controlWidth,
+        height: compact ? 34 : 28,
+        margin: { right: 12 },
+        alignItems: 'center',
+        justifyContent: 'center',
       },
-      uiBackground: { color: Color4.create(0, 0, 0, 0.9) },
-    }, [
-      h(Label, {
-        key: 'title',
-        value: 'HOW TO PLAY',
-        fontSize: titleFontSize,
-        color: PINK,
-        uiTransform: { width: '100%', height: titleHeight, margin: { bottom: compact ? 8 : s(10) } },
-      }),
-      h(Label, {
-        key: 'rule1',
-        value: 'Click the Doge head to create or join a room.',
-        fontSize: bodyFontSize,
-        color: WHITE,
-        uiTransform: { width: '100%', height: lineHeight, margin: { bottom: compact ? 3 : s(4) } },
-      }),
-      h(Label, {
-        key: 'rule2',
-        value: 'Ready up, then host starts the game.',
-        fontSize: bodyFontSize,
-        color: WHITE,
-        uiTransform: { width: '100%', height: lineHeight, margin: { bottom: sectionGap } },
-      }),
-      h(Label, {
-        key: 'rule3',
-        value: 'All Doges look identical.',
-        fontSize: bodyFontSize,
-        color: WHITE,
-        uiTransform: { width: '100%', height: lineHeight, margin: { bottom: compact ? 3 : s(4) } },
-      }),
-      h(Label, {
-        key: 'rule4',
-        value: 'BONK suspicious Doges to eliminate real players.',
-        fontSize: bodyFontSize,
-        color: WHITE,
-        uiTransform: { width: '100%', height: lineHeight, margin: { bottom: sectionGap } },
-      }),
-      h(Label, {
-        key: 'rule5',
-        value: 'Win: last real player standing.',
-        fontSize: bodyFontSize,
-        color: GOLD,
-        uiTransform: { width: '100%', height: lineHeight, margin: { bottom: compact ? 3 : s(4) } },
-      }),
-      h(Label, {
-        key: 'rule6',
-        value: 'Solo: clear all NPCs. Time up: most Bonks wins.',
-        fontSize: bodyFontSize,
-        color: CYAN,
-        uiTransform: { width: '100%', height: lineHeight, margin: { bottom: compact ? 6 : s(10) } },
-      }),
-      h(Button, {
-        key: 'exportLeaderboardBtn',
-        value: 'EXPORT CSV',
-        variant: 'secondary',
-        uiTransform: {
-          width: compact ? 128 : s(128),
-          height: compact ? 30 : s(30),
-          alignSelf: 'center',
-        },
-        fontSize: compact ? 11 : s(11),
-        onMouseDown: () => {
-          requestLeaderboardCsvExport()
-        },
-      }),
-    ]),
-  ])
+      uiBackground: {
+        color: currentPage === 0
+          ? Color4.create(0.48, 0.48, 0.54, 0.7)
+          : Color4.create(1, 0.84, 0, 1),
+        textureMode: 'stretch',
+        texture: { src: 'assets/images/PageArrowLeft.png' },
+      },
+      ...(currentPage > 0 ? { onMouseDown: () => onPageChange(currentPage - 1) } : {}),
+    }),
+    h(Label, {
+      key: 'pageLabel',
+      value: `Page ${currentPage + 1}/${pageCount}`,
+      fontSize: compact ? 15 : 14,
+      color: Color4.create(0.82, 0.82, 0.86, 1),
+      textAlign: 'middle-center',
+      uiTransform: { width: compact ? 108 : 96, height: compact ? 34 : 28 },
+    }),
+    h(UiEntity, {
+      key: 'next',
+      uiTransform: {
+        width: controlWidth,
+        height: compact ? 34 : 28,
+        margin: { left: 12 },
+        alignItems: 'center',
+        justifyContent: 'center',
+      },
+      uiBackground: {
+        color: currentPage >= pageCount - 1
+          ? Color4.create(0.48, 0.48, 0.54, 0.7)
+          : Color4.create(1, 0.84, 0, 1),
+        textureMode: 'stretch',
+        texture: { src: 'assets/images/PageArrowRight.png' },
+      },
+      ...(currentPage < pageCount - 1 ? { onMouseDown: () => onPageChange(currentPage + 1) } : {}),
+    }),
+  ] : [])
+}
+
+function isLeaderboardExportAdmin(): boolean {
+  const identity = PlayerIdentityData.getOrNull(engine.PlayerEntity)
+  const player = getPlayer()
+  const candidates = [
+    { source: 'PlayerIdentityData.address', address: identity?.address ?? '' },
+    { source: 'getPlayer.userId', address: player?.userId ?? '' },
+  ]
+  const match = candidates.find((candidate) => candidate.address && isDogeHuntAdmin(candidate.address))
+  const firstResolved = match ?? candidates.find((candidate) => candidate.address)
+  const isAdmin = match !== undefined
+  const logKey = `${isMobile()}|${isAdmin}|${firstResolved?.source ?? 'none'}|${firstResolved?.address ?? 'none'}|${player?.isGuest === true}`
+
+  if (logKey !== lastAdminResolutionLog) {
+    lastAdminResolutionLog = logKey
+    console.log(
+      `[Admin] mobile=${isMobile()} admin=${isAdmin} source=${firstResolved?.source ?? 'none'} address=${firstResolved?.address ? getShortAddress(firstResolved.address) : 'none'} guest=${player?.isGuest === true}`,
+    )
+  }
+
+  return isAdmin
+}
+
+function displayNameOrAddress(displayName: string, address: string): string {
+  const normalizedName = displayName.trim()
+  if (normalizedName && normalizedName.toLowerCase() !== 'player' && normalizedName.toLowerCase() !== 'you') {
+    return normalizedName
+  }
+
+  return getShortAddress(address) || 'Player'
+}
+
+function waitingRoomPlayerLabel(displayName: string, address: string): string {
+  const normalizedName = displayName.trim()
+  const isUsableName = normalizedName
+    && normalizedName.toLowerCase() !== 'player'
+    && normalizedName.toLowerCase() !== 'you'
+  const walletPrefix = address.length > 6 ? `${address.slice(0, 6)}...` : address
+  const label = isUsableName ? normalizedName : walletPrefix || 'Player'
+  return label.length > 18 ? `${label.slice(0, 17)}...` : label
 }
 
 function renderLeaderboardRulesUI() {
@@ -956,8 +1148,8 @@ function renderLeaderboardRulesUI() {
   const GOLD = Color4.create(1, 0.84, 0, 1)
   const MUTED = Color4.create(0.78, 0.8, 0.86, 1)
   const CYAN = Color4.create(0, 0.96, 1, 1)
-  const bodyFontSize = compact ? 15 : 18
-  const lineHeight = compact ? 24 : 30
+  const bodyFontSize = compact ? 16 : 18
+  const lineHeight = compact ? 26 : 30
 
   return h(UiEntity, {
     key: 'leaderboardRulesOverlay',
@@ -984,8 +1176,8 @@ function renderLeaderboardRulesUI() {
     h(UiEntity, {
       key: 'leaderboardRulesModal',
       uiTransform: {
-        width: compact ? '88%' : 620,
-        height: compact ? '82%' : 610,
+        width: compact ? '70.4%' : 620,
+        height: compact ? '88%' : 610,
         flexDirection: 'column',
         alignItems: 'center',
         justifyContent: 'flex-start',
@@ -999,7 +1191,7 @@ function renderLeaderboardRulesUI() {
       h(Label, {
         key: 'title',
         value: 'WEEKLY RANKING RULES',
-        fontSize: compact ? 24 : 30,
+        fontSize: compact ? 26 : 30,
         color: GOLD,
         textAlign: 'middle-center',
         uiTransform: {
@@ -1011,19 +1203,20 @@ function renderLeaderboardRulesUI() {
       h(Label, {
         key: 'weeklyReset',
         value: 'The leaderboard resets every Monday at 00:00 UTC.',
-        fontSize: compact ? 14 : 17,
+        fontSize: compact ? 16 : 17,
         color: MUTED,
         textAlign: 'middle-center',
         uiTransform: {
           width: '100%',
-          height: compact ? 42 : 30,
+          height: compact ? 'auto' : 30,
+          minHeight: compact ? 42 : undefined,
           margin: { bottom: compact ? 12 : 18 },
         },
       }),
       h(Label, {
         key: 'soloTitle',
         value: 'SOLO',
-        fontSize: compact ? 19 : 22,
+        fontSize: compact ? 21 : 22,
         color: CYAN,
         textAlign: 'middle-left',
         uiTransform: { width: '100%', height: lineHeight },
@@ -1051,7 +1244,7 @@ function renderLeaderboardRulesUI() {
       h(Label, {
         key: 'multiTitle',
         value: 'MULTIPLAYER',
-        fontSize: compact ? 19 : 22,
+        fontSize: compact ? 21 : 22,
         color: CYAN,
         textAlign: 'middle-left',
         uiTransform: { width: '100%', height: lineHeight },
@@ -1079,7 +1272,7 @@ function renderLeaderboardRulesUI() {
       h(Label, {
         key: 'rankingTitle',
         value: 'HOW MULTIPLAYER RANKING WORKS',
-        fontSize: compact ? 17 : 20,
+        fontSize: compact ? 19 : 20,
         color: GOLD,
         textAlign: 'middle-left',
         uiTransform: { width: '100%', height: lineHeight },
@@ -1087,23 +1280,23 @@ function renderLeaderboardRulesUI() {
       h(Label, {
         key: 'rankingRule1',
         value: 'The winner ranks first. Survivors rank above eliminated players.',
-        fontSize: compact ? 14 : 17,
+        fontSize: compact ? 16 : 17,
         color: WHITE,
         textAlign: 'middle-left',
-        uiTransform: { width: '100%', height: compact ? 44 : lineHeight },
+        uiTransform: { width: '100%', height: compact ? 'auto' : lineHeight, minHeight: compact ? 44 : undefined },
       }),
       h(Label, {
         key: 'rankingRule2',
         value: 'Survivors rank by Bonks. Eliminated players rank by survival time.',
-        fontSize: compact ? 14 : 17,
+        fontSize: compact ? 16 : 17,
         color: WHITE,
         textAlign: 'middle-left',
-        uiTransform: { width: '100%', height: compact ? 44 : lineHeight },
+        uiTransform: { width: '100%', height: compact ? 'auto' : lineHeight, minHeight: compact ? 44 : undefined },
       }),
       h(Label, {
         key: 'rankingRule3',
         value: 'Leaving a match counts as elimination.',
-        fontSize: compact ? 14 : 17,
+        fontSize: compact ? 16 : 17,
         color: MUTED,
         textAlign: 'middle-left',
         uiTransform: {
@@ -1116,9 +1309,9 @@ function renderLeaderboardRulesUI() {
         key: 'closeLeaderboardRules',
         value: 'CLOSE',
         variant: 'primary',
-        fontSize: compact ? 16 : 18,
+        fontSize: compact ? 18 : 18,
         uiTransform: {
-          width: compact ? 180 : 220,
+          width: compact ? 144 : 220,
           height: compact ? 44 : 48,
           alignSelf: 'center',
         },
@@ -1140,10 +1333,12 @@ function renderHUD() {
         total: 11,
         timeLeft: 180,
         roundOver: false,
+        realPlayersAlive: null,
         serverPublicLabel: '',
         localPlayerStatus: 'active',
         localStatusLabel: 'ACTIVE',
         canAct: true,
+        isWatcher: false,
       }
   
   const formatTime = (seconds: number): string => {
@@ -1172,6 +1367,14 @@ function renderHUD() {
   const isSpectating = data.canAct === false
     || data.localPlayerStatus === 'spectator'
     || data.localPlayerStatus === 'out'
+  const handleSpectatorReturnToLobby = () => {
+    console.log('[UI] Spectator Return to Lobby clicked')
+    if (onReturnToLobby) {
+      onReturnToLobby()
+      return
+    }
+    requestServerRoomLeave('spectator-return-to-lobby')
+  }
   const rockHudState = getTurnToRockHudState()
   const rockIsReady = rockHudState.statusLabel === 'Ready'
   const rockIsActive = rockHudState.statusLabel.startsWith('Active:')
@@ -1192,9 +1395,10 @@ function renderHUD() {
     ? Color4.create(1, 1, 1, 0.55)
     : Color4.White()
   const mobileActions = isMobile()
-  // Includes Bonk's gap plus Rock's mobile-only left offset, so flex never
-  // shrinks either square image button to fit the group.
-  const mobileActionGroupWidth = actionButtonSize * 2 + es(14) + es(10)
+  // Mobile stacks Bonk over Rock on one fixed-width axis. This avoids the
+  // immutable Explorer controls at the lower-right while preserving equal art.
+  const mobileActionGroupWidth = actionButtonSize
+  const mobileActionGroupHeight = actionButtonSize + es(14) + rockButtonHeight
   
   const panel = h(UiEntity, {
     key: 'hudPanel',
@@ -1307,6 +1511,10 @@ function renderHUD() {
   ])
 
   const compactHud = isMobile()
+  // Results can take a frame to replace the HUD after the server settles. Do
+  // not show a competing mobile "ROUND OVER" banner during that hand-off.
+  const showGameTimer = !compactHud || !data.roundOver
+  const canUseAdminControls = isLeaderboardExportAdmin()
   const timerWidth = compactHud ? 200 : 260
   const timerHeight = compactHud ? 56 : 68
   const timerFontSize = 40
@@ -1355,17 +1563,63 @@ function renderHUD() {
     }),
   ])
 
+  const realPlayersAlive = data.realPlayersAlive
+  const realPlayersAliveLabel = realPlayersAlive === null || realPlayersAlive === undefined
+    ? ''
+    : `${realPlayersAlive} REAL PLAYER${realPlayersAlive === 1 ? '' : 'S'} ALIVE`
+  const playerCountFontSize = compactHud ? 15 : 17
+  const playerCountWidth = compactHud ? 250 : 300
+  const playerCountHeight = compactHud ? 24 : 28
+  const playerCountTop = compactHud ? 74 : 98
+  const playerCountOutlineOffsets = [
+    { left: -1, top: -1 }, { left: 0, top: -1 }, { left: 1, top: -1 },
+    { left: -1, top: 0 }, { left: 1, top: 0 },
+    { left: -1, top: 1 }, { left: 0, top: 1 }, { left: 1, top: 1 },
+  ]
+  const realPlayersCounter = realPlayersAlive === null || realPlayersAlive === undefined
+    ? null
+    : h(UiEntity, {
+    key: 'realPlayersAliveCounter',
+    uiTransform: {
+      width: playerCountWidth,
+      height: playerCountHeight,
+      positionType: 'absolute',
+      position: { left: '50%', top: playerCountTop },
+      margin: { left: -Math.round(playerCountWidth / 2) },
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+  }, [
+    ...playerCountOutlineOffsets.map((offset, index) => h(Label, {
+      key: `realPlayersAliveOutline${index}`,
+      value: realPlayersAliveLabel,
+      fontSize: playerCountFontSize,
+      color: Color4.Black(),
+      textAlign: 'middle-center',
+      uiTransform: { width: '100%', height: playerCountHeight, positionType: 'absolute', position: offset },
+    })),
+    h(Label, {
+      key: 'realPlayersAliveText',
+      value: realPlayersAliveLabel,
+      fontSize: playerCountFontSize,
+      color: GREEN,
+      textAlign: 'middle-center',
+      uiTransform: { width: '100%', height: playerCountHeight },
+    }),
+  ])
+
   const actionButtons = h(UiEntity, {
     key: 'actionWrap',
     uiTransform: {
       positionType: 'absolute',
       position: mobileActions
-        ? { right: es(220) + 30, bottom: es(18) }
+        ? { left: '50%', bottom: es(8) }
         : { left: 0, right: 0, bottom: es(18) },
       width: mobileActions ? mobileActionGroupWidth : '100%',
-      height: rockButtonHeight,
-      flexDirection: mobileActions ? 'row-reverse' : 'row',
-      alignItems: 'flex-end',
+      height: mobileActions ? mobileActionGroupHeight : rockButtonHeight,
+      margin: mobileActions ? { left: -Math.round(mobileActionGroupWidth / 2) + es(130) } : undefined,
+      flexDirection: mobileActions ? 'column' : 'row',
+      alignItems: mobileActions ? 'center' : 'flex-end',
       justifyContent: mobileActions ? 'flex-end' : 'center',
     },
   }, [
@@ -1374,15 +1628,15 @@ function renderHUD() {
       uiTransform: {
         width: actionButtonSize,
         height: actionButtonSize,
-        margin: { right: es(14) },
+        position: mobileActions ? { left: es(30) } : undefined,
+        // Pull BONK 20px toward Rock while the fixed-height stack keeps Rock anchored.
+        margin: { bottom: es(-6) },
       },
       uiBackground: {
         textureMode: 'stretch',
         texture: { src: 'assets/images/Bonk.png' },
       },
-      onMouseDown: !isSpectating ? () => {
-        triggerPlayerBonkAttack()
-      } : undefined,
+      onMouseDown: !isSpectating ? () => triggerPlayerBonkAttack() : undefined,
     }, [
       ...(isSpectating ? [h(UiEntity, {
         key: 'mobileBonkDisabledOverlay',
@@ -1395,7 +1649,6 @@ function renderHUD() {
       uiTransform: {
         width: rockButtonSize,
         height: rockButtonHeight,
-        margin: mobileActions ? { right: es(10) } : undefined,
         flexDirection: 'column',
         justifyContent: 'flex-end',
         alignItems: 'center',
@@ -1422,7 +1675,7 @@ function renderHUD() {
           textAlign: 'middle-center',
           uiTransform: {
             width: '100%',
-            height: '100%',
+            height: 34,
             positionType: 'absolute',
             position: offset,
           },
@@ -1447,22 +1700,100 @@ function renderHUD() {
           textureMode: 'stretch',
           texture: { src: rockButtonImageSrc },
         },
-        onMouseDown: !rockButtonDisabled ? () => {
-          triggerTurnToRock()
-        } : undefined,
+        onMouseDown: !rockButtonDisabled ? () => triggerTurnToRock() : undefined,
       }),
     ]),
   ])
 
-  // DEBUG: Kill All button (center-top)
+  const safeActionButtons = actionButtons && mobileActions
+    ? h(ScreenInsetArea, {
+        key: 'mobileActionSafeArea',
+        uiTransform: { width: '100%', height: '100%' },
+      }, [actionButtons])
+    : actionButtons
+
+  const watcherModeIndicator = data.isWatcher === true
+    ? h(UiEntity, {
+        key: 'watcherMode',
+        uiTransform: {
+          width: 260,
+          height: 82,
+          positionType: 'absolute',
+          position: { left: '50%', bottom: compactHud ? 36 : 30 },
+          margin: { left: -130 },
+          alignItems: 'center',
+          justifyContent: 'center',
+        },
+      }, [
+        h(UiEntity, {
+          key: 'watcherModeLabelLayer',
+          uiTransform: {
+            width: '100%',
+            height: 34,
+            positionType: 'absolute',
+            position: { left: 0, top: 0 },
+          },
+        }, [
+          ...[
+            { left: -1, top: -1 },
+            { left: 0, top: -1 },
+            { left: 1, top: -1 },
+            { left: -1, top: 0 },
+            { left: 1, top: 0 },
+            { left: -1, top: 1 },
+            { left: 0, top: 1 },
+            { left: 1, top: 1 },
+          ].map((offset, index) => h(Label, {
+            key: `watcherModeOutline${index}`,
+            value: 'SPECTATOR MODE',
+            fontSize: compactHud ? 19 : 18,
+            color: Color4.Black(),
+            textAlign: 'middle-center',
+            uiTransform: {
+              width: '100%',
+              height: '100%',
+              positionType: 'absolute',
+              position: offset,
+            },
+          })),
+          h(Label, {
+            key: 'watcherModeText',
+            value: 'SPECTATOR MODE',
+            fontSize: compactHud ? 19 : 18,
+            color: CYAN,
+            textAlign: 'middle-center',
+            uiTransform: { width: '100%', height: '100%' },
+          }),
+        ]),
+        h(Button, {
+          key: 'watcherReturnToLobby',
+          value: 'RETURN TO LOBBY',
+          variant: 'secondary',
+          uiTransform: {
+            width: compactHud ? 190 : 190,
+            height: 36,
+            positionType: 'absolute',
+            position: { left: 35, top: 42 },
+          },
+          fontSize: compactHud ? 14 : 14,
+          onMouseDown: handleSpectatorReturnToLobby,
+        }),
+      ])
+    : null
+
+  const npcFreezeButtonLabel = areServerNpcsFrozen()
+    ? 'RESUME NPCs'
+    : 'FREEZE NPCs'
+
+  // DEBUG: Server-owned NPC controls (center-top)
   const debugButton = h(UiEntity, {
     key: 'debugButtonWrap',
     uiTransform: {
       positionType: 'absolute',
-      position: { left: '50%', top: 92 },
-      margin: { left: -400 },
-      width: 800,
-      height: 50,
+      position: { left: '50%', top: compactHud ? 116 : 140 },
+      margin: { left: compactHud ? -240 : -460 },
+      width: compactHud ? 480 : 920,
+      height: compactHud ? 44 : 50,
       flexDirection: 'row',
       alignItems: 'center',
       justifyContent: 'center',
@@ -1472,8 +1803,8 @@ function renderHUD() {
       key: 'markOutBtn',
       value: 'OUT (DEBUG)',
       variant: 'secondary',
-      uiTransform: { width: 140, height: 50, margin: { right: 10 } },
-      fontSize: 13,
+      uiTransform: { width: compactHud ? 100 : 140, height: compactHud ? 44 : 50, margin: { right: compactHud ? 6 : 10 } },
+      fontSize: compactHud ? 10 : 13,
       onMouseDown: () => {
         console.log('[DEBUG][T] Server mark out button clicked')
         requestServerDebugMarkLocalOut()
@@ -1483,8 +1814,8 @@ function renderHUD() {
       key: 'killAllBtn',
       value: 'KILL ALL (DEBUG)',
       variant: 'secondary',
-      uiTransform: { width: 180, height: 50, margin: { right: 10 } },
-      fontSize: 14,
+      uiTransform: { width: compactHud ? 120 : 180, height: compactHud ? 44 : 50, margin: { right: compactHud ? 6 : 10 } },
+      fontSize: compactHud ? 10 : 14,
       onMouseDown: () => {
         console.log('[DEBUG][S] Server Kill All button clicked')
         requestServerDebugEliminateAllDoges()
@@ -1494,19 +1825,71 @@ function renderHUD() {
       key: 'forceEndBtn',
       value: 'END ROUND (DEBUG)',
       variant: 'secondary',
-      uiTransform: { width: 210, height: 50 },
-      fontSize: 13,
+      uiTransform: { width: compactHud ? 130 : 210, height: compactHud ? 44 : 50, margin: { right: compactHud ? 6 : 10 } },
+      fontSize: compactHud ? 10 : 13,
       onMouseDown: () => {
         console.log('[DEBUG][T] Server force round end button clicked')
         requestServerDebugForceRoundEnd()
       },
     }),
+    h(Button, {
+      key: 'npcFreezeBtn',
+      value: npcFreezeButtonLabel,
+      variant: 'secondary',
+      uiTransform: { width: compactHud ? 112 : 250, height: compactHud ? 44 : 50 },
+      fontSize: compactHud ? 10 : 13,
+      onMouseDown: () => {
+        console.log(`[DEBUG][Admin] ${npcFreezeButtonLabel} button clicked`)
+        requestServerDebugToggleNpcFreeze()
+      },
+    }),
   ])
 
-  const children = [timer]
-  children.push(actionButtons)
-  if (DEBUG_CONTROLS_ENABLED && !compactHud) {
+  const children = showGameTimer ? [timer] : []
+  if (realPlayersCounter) children.push(realPlayersCounter)
+  const eliminationChoice = renderEliminationChoice(compactHud)
+  if (eliminationChoice) children.push(eliminationChoice)
+  const feedbackTop = compactHud
+    ? 136
+    : DEBUG_CONTROLS_ENABLED && canUseAdminControls
+      ? 210
+      : 136
+  const feedback = renderGameplayFeedback(compactHud, feedbackTop)
+  if (feedback) children.push(feedback)
+  if (!isSpectating && safeActionButtons) children.push(safeActionButtons)
+  if (watcherModeIndicator) children.push(watcherModeIndicator)
+  if (!eliminationChoice && DEBUG_CONTROLS_ENABLED && canUseAdminControls) {
     children.push(debugButton)
+  }
+  if (!compactHud) {
+    children.push(h(UiEntity, {
+      key: 'desktopGameplayHint',
+      uiTransform: {
+        width: 290,
+        height: 'auto',
+        positionType: 'absolute',
+        position: { right: 34, bottom: es(18) },
+        flexDirection: 'column',
+        padding: { top: 16, bottom: 16, left: 20, right: 20 },
+        zIndex: 2,
+      },
+      uiBackground: { color: Color4.create(0, 0, 0, 0.9) },
+    }, [
+      h(Label, {
+        key: 'bonkHint',
+        value: 'Click and Bonk Doges.',
+        fontSize: 20,
+        color: Color4.White(),
+        uiTransform: { width: '100%', height: 'auto', margin: { bottom: 6 } },
+      }),
+      h(Label, {
+        key: 'rockHint',
+        value: 'Use "Rock" skill to hide.',
+        fontSize: 20,
+        color: Color4.White(),
+        uiTransform: { width: '100%', height: 'auto' },
+      }),
+    ]))
   }
 
   return h(UiEntity, {
@@ -1517,4 +1900,132 @@ function renderHUD() {
       position: { left: 0, top: 0 },
     },
   }, children)
+}
+
+function renderEliminationChoice(compact: boolean) {
+  if (!isEliminationChoicePending()) return null
+
+  const width = compact ? '62.4%' : 420
+  const height = compact ? 222 : 238
+  const handleSpectate = () => {
+    resolveEliminationChoice()
+    setLocalEliminatedSpectatingMode(true)
+    console.log('[UI] Eliminated player chose spectator mode')
+  }
+  const handleReturnToLobby = () => {
+    resolveEliminationChoice()
+    console.log('[UI] Eliminated player chose return to lobby')
+    if (onReturnToLobby) {
+      onReturnToLobby()
+      return
+    }
+    requestServerRoomLeave('eliminated-return-to-lobby')
+  }
+
+  return h(UiEntity, {
+    key: 'eliminationChoiceOverlay',
+    uiTransform: {
+      width: '100%',
+      height: '100%',
+      positionType: 'absolute',
+      position: { left: 0, top: 0 },
+      zIndex: 8,
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+  }, [
+    h(UiEntity, {
+      key: 'eliminationChoicePanel',
+      uiTransform: {
+        width,
+        height,
+        flexDirection: 'column',
+        alignItems: 'center',
+        justifyContent: 'center',
+        padding: compact
+          ? { top: 16, bottom: 16, left: 18, right: 18 }
+          : { top: 18, bottom: 18, left: 24, right: 24 },
+      },
+      uiBackground: { color: Color4.create(0.06, 0.06, 0.1, 0.96) },
+    }, [
+      h(Label, {
+        key: 'eliminationChoiceTitle',
+        value: 'ELIMINATED',
+        fontSize: compact ? 30 : 34,
+        color: Color4.create(1, 0.2, 0.2, 1),
+        textAlign: 'middle-center',
+        uiTransform: { width: '100%', height: compact ? 42 : 46 },
+      }),
+      h(Label, {
+        key: 'eliminationChoiceDetail',
+        value: getEliminationChoiceDetail(),
+        fontSize: compact ? 16 : 17,
+        color: Color4.create(0.9, 0.9, 0.94, 1),
+        textAlign: 'middle-center',
+        uiTransform: { width: '100%', height: compact ? 28 : 30, margin: { bottom: compact ? 12 : 14 } },
+      }),
+      h(Button, {
+        key: 'eliminationSpectate',
+        value: 'SPECTATE',
+        variant: 'primary',
+        uiTransform: { width: compact ? '86%' : 280, height: compact ? 46 : 48, margin: { bottom: 10 } },
+        fontSize: compact ? 18 : 18,
+        onMouseDown: handleSpectate,
+      }),
+      h(Button, {
+        key: 'eliminationReturnToLobby',
+        value: 'RETURN TO LOBBY',
+        variant: 'secondary',
+        uiTransform: { width: compact ? '86%' : 280, height: compact ? 42 : 44 },
+        fontSize: compact ? 15 : 16,
+        onMouseDown: handleReturnToLobby,
+      }),
+    ]),
+  ])
+}
+
+function renderGameplayFeedback(compact: boolean, top: number) {
+  const feedback = getGameplayFeedback()
+  if (!feedback) return null
+
+  const isEliminated = feedback.kind === 'eliminated'
+  const color = isEliminated
+    ? Color4.create(1, 0.2, 0.2, 1)
+    : feedback.kind === 'player-eliminated'
+      ? Color4.create(1, 0.84, 0, 1)
+      : Color4.create(0, 0.96, 1, 1)
+  const width = compact ? 300 : 360
+
+  return h(UiEntity, {
+    key: 'gameplayFeedback',
+    uiTransform: {
+      width,
+      height: isEliminated ? 92 : 68,
+      positionType: 'absolute',
+      position: { left: '50%', top },
+      margin: { left: -Math.round(width / 2) },
+      flexDirection: 'column',
+      alignItems: 'center',
+      justifyContent: 'center',
+      padding: { top: 6, bottom: 6, left: 12, right: 12 },
+    },
+    uiBackground: { color: Color4.create(0.05, 0.05, 0.08, isEliminated ? 0.9 : 0.78) },
+  }, [
+    h(Label, {
+      key: 'title',
+      value: feedback.title,
+      fontSize: isEliminated ? (compact ? 30 : 32) : (compact ? 22 : 24),
+      color,
+      textAlign: 'middle-center',
+      uiTransform: { width: '100%', height: isEliminated ? 42 : 32 },
+    }),
+    h(Label, {
+      key: 'detail',
+      value: feedback.detail,
+      fontSize: compact ? 14 : 15,
+      color: Color4.create(0.9, 0.9, 0.94, 1),
+      textAlign: 'middle-center',
+      uiTransform: { width: '100%', height: 24 },
+    }),
+  ])
 }

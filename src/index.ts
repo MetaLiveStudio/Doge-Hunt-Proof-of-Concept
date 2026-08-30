@@ -55,10 +55,12 @@ import { setupO4ClientDiagnostics, setupO4ServerDiagnostics } from './authDiagno
 import { setServerMatchStartHandler, setupServerRoomClient } from './client/serverRoomClient'
 import {
   canLocalServerPlayerAct,
+  isLocalSpectatorPresentation,
   getLocalServerPlayerStatus,
   getLocalServerPlayerStatusLabel,
   getServerResultsRevealLines,
   getServerResultsRevealData,
+  getServerActivePlayerCount,
   getServerPublicHudLabel,
   getServerResultOutcome,
   getServerStateFreshness,
@@ -70,6 +72,7 @@ import { syncRemotePlayerProxies } from './client/remotePlayerProxies'
 import { setupLeaderboardBoard } from './client/leaderboardBoard'
 import { setupLeaderboardClient, resetLeaderboardAward } from './client/leaderboardClient'
 import { setupGameAudio } from './client/gameAudio'
+import { updateMobileNativeGameplayControls } from './client/mobileNativeControls'
 
 let activeMatchConfig: LocalMatchConfig = getFallbackLocalMatchConfig()
 let gameInitialized = false
@@ -193,6 +196,7 @@ export async function main() {
         isWin: outcome?.isWin,
         resultTitle: outcome?.title,
         resultSubtitle: outcome?.subtitle,
+        isSpectatorResult: outcome?.isSpectator,
       }
     },
     getHudData: () => {
@@ -203,10 +207,12 @@ export async function main() {
         total: stats.total,
         timeLeft: stats.timeLeft,
         roundOver: stats.roundOver,
+        realPlayersAlive: getServerActivePlayerCount(activeMatchConfig.matchId),
         serverPublicLabel: getServerPublicHudLabel(activeMatchConfig.matchId),
         localPlayerStatus: getLocalServerPlayerStatus(),
         localStatusLabel: getLocalServerPlayerStatusLabel(),
         canAct: canLocalServerPlayerAct(),
+        isWatcher: isLocalSpectatorPresentation(),
       }
     },
   })
@@ -216,6 +222,15 @@ export async function main() {
   setupLeaderboardBoard()
 
   // 4. Register game systems (only run when playing)
+  engine.addSystem(() => {
+    updateMobileNativeGameplayControls({
+      isPlaying: isPlaying(),
+      canAct: canLocalServerPlayerAct(),
+      playerStatus: getLocalServerPlayerStatus(),
+      isSpectating: isLocalSpectatorPresentation(),
+    })
+  })
+
   engine.addSystem((dt: number) => {
     if (!isPlaying()) return
     npcPatrolSystem(dt)

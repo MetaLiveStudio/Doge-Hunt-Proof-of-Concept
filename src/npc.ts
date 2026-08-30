@@ -13,7 +13,12 @@ import { isMobile } from '@dcl/sdk/platform'
 import { trackNpc } from './gameReset'
 import { PLAYER_RUN_SPEED, PLAYER_WALK_SPEED } from './player'
 import { getLocalPublicDogeState, recordLocalDogeEliminated } from './localMatchState'
-import type { ServerNpcSnapshotPayload } from './shared/serverNpcSnapshot'
+import {
+  getServerNpcPresentationAction,
+  getServerNpcTransform,
+  type ServerNpcPresentationAction,
+  type ServerNpcSnapshotPayload,
+} from './shared/serverNpcSnapshot'
 
 // --- Custom components ---
 
@@ -53,7 +58,7 @@ export const NpcHitbox = engine.defineComponent('npcHitbox', {
 
 // --- Model paths ---
 const DESKTOP_DOGE_MODEL = 'models/Muscledoge.glb'
-const MOBILE_DOGE_MODEL = 'models/MuscledogeMobile.glb'
+const MOBILE_DOGE_MODEL = 'models/MuscledogeMobile2.glb'
 export const DEAD_DOGE_MODEL = 'models/SmallDoge.glb'
 
 function getDogeModelSrc(): string {
@@ -72,6 +77,9 @@ export const NPC_HITBOX_SCALE = Vector3.create(3.2, 3.2, 3.2)
 export const NPC_DEAD_VISUAL_SCALE = Vector3.create(0.5, 0.5, 0.5)
 const NPC_GROUND_RAY_OFFSET = Vector3.create(0, 6, 0)
 const NPC_GROUND_RAY_MAX_DISTANCE = 20
+const NPC_ARENA_GROUND_Y = 0
+const NPC_GROUND_MIN_Y = -1
+const NPC_GROUND_MAX_Y = 1.25
 const NPC_OBSTACLE_PROBE_OFFSET = Vector3.create(0, 1.15, 0)
 const NPC_OBSTACLE_RAY_MAX_DISTANCE = 1.5
 const NPC_OBSTACLE_BLOCK_DISTANCE = 1.1
@@ -99,24 +107,48 @@ const enum NpcAction {
   Jump = 4,
 }
 
+function getNpcActionFromServer(action: ServerNpcPresentationAction): NpcAction {
+  switch (action) {
+    case 'idle': return NpcAction.Idle
+    case 'run': return NpcAction.Run
+    case 'jump': return NpcAction.Jump
+    case 'bonk': return NpcAction.Bonk
+    case 'walk':
+    default:
+      return NpcAction.Walk
+  }
+}
+
 // --- NPC activity area ---
 const CX = 48
 const CZ = 48
 const NPC_ACTIVITY_RADIUS = 36
 const NPC_LABEL_Y = 3.8
 const NPC_LABEL_FONT_SIZE = 3
+const SERVER_NPC_POSE_FOLLOW_SPEED = 18
+const SERVER_NPC_MAX_EXTRAPOLATION_SECONDS = 0.5
+
+type ServerNpcPoseTarget = {
+  fallbackId: number
+  snapshotElapsedSeconds: number
+  secondsSinceSnapshot: number
+  snapPending: boolean
+  isFrozen: boolean
+}
 
 // --- Alive tracking ---
 export let aliveCount = 0
 export let NPC_TOTAL = 0
 
 const npcPublicDogeIds = new Map<Entity, string>()
+const serverNpcPoseTargets = new Map<string, ServerNpcPoseTarget>()
 
 /** Reset NPC counters */
 export function resetNpcCounters(): void {
   aliveCount = 0
   NPC_TOTAL = 0
   npcPublicDogeIds.clear()
+  serverNpcPoseTargets.clear()
 }
 
 export function getNpcPublicDogeId(entity: Entity): string | null {
@@ -156,9 +188,22 @@ export function applyNpcPublicDogePresentation(publicDogeId: string | null, hitO
 
 export function applyServerNpcSnapshot(payload: ServerNpcSnapshotPayload): void {
   let eliminated = 0
-  let stateOnly = 0
 
-  for (const entry of payload.npcs) {
+  for (let fallbackId = 0; fallbackId < payload.npcs.length; fallbackId++) {
+    const entry = payload.npcs[fallbackId]
+    if (!entry.isEliminated && entry.visualState !== 'eliminated') {
+      const previousTarget = serverNpcPoseTargets.get(entry.publicDogeId)
+      serverNpcPoseTargets.set(entry.publicDogeId, {
+        fallbackId,
+        snapshotElapsedSeconds: payload.elapsedSeconds,
+        secondsSinceSnapshot: 0,
+        snapPending: previousTarget?.snapPending ?? true,
+        isFrozen: payload.isFrozen,
+      })
+    } else {
+      serverNpcPoseTargets.delete(entry.publicDogeId)
+    }
+
     const npc = getNpcByPublicDogeId(entry.publicDogeId)
     if (!npc || !NpcPatrol.has(npc) || !Transform.has(npc)) continue
 
@@ -173,14 +218,10 @@ export function applyServerNpcSnapshot(payload: ServerNpcSnapshotPayload): void 
       }
       continue
     }
-
-    if (!patrol.isKnockedOut && !patrol.isBeingEliminated) {
-      stateOnly += 1
-    }
   }
 
-  if (stateOnly > 0 || eliminated > 0) {
-    console.log(`[Client][W2] npcStateSnapshot state-only matchId=${payload.matchId} version=${payload.version} observed=${stateOnly} eliminated=${eliminated}`)
+  if (eliminated > 0) {
+    console.log(`[Client][NPC] authoritative snapshot matchId=${payload.matchId} version=${payload.version} eliminated=${eliminated}`)
   }
 }
 
@@ -724,6 +765,62 @@ export function npcPatrolSystem(dt: number): void {
       continue
     }
 
+    const publicDogeId = npcPublicDogeIds.get(entity)
+    const serverPoseTarget = publicDogeId
+      ? serverNpcPoseTargets.get(publicDogeId)
+      : null
+    if (serverPoseTarget) {
+      if (!serverPoseTarget.isFrozen) {
+        serverPoseTarget.secondsSinceSnapshot = Math.min(
+          SERVER_NPC_MAX_EXTRAPOLATION_SECONDS,
+          serverPoseTarget.secondsSinceSnapshot + Math.max(0, dt)
+        )
+      }
+      const predictedPose = getServerNpcTransform(
+        publicDogeId!,
+        serverPoseTarget.fallbackId,
+        serverPoseTarget.snapshotElapsedSeconds + serverPoseTarget.secondsSinceSnapshot
+      )
+      const serverAction = serverPoseTarget.isFrozen
+        ? 'idle'
+        : getServerNpcPresentationAction(
+            publicDogeId!,
+            serverPoseTarget.fallbackId,
+            serverPoseTarget.snapshotElapsedSeconds + serverPoseTarget.secondsSinceSnapshot
+          )
+      const groundedY = getGroundHeight(entity)
+      const followAmount = serverPoseTarget.snapPending
+        ? 1
+        : 1 - Math.exp(-SERVER_NPC_POSE_FOLLOW_SPEED * Math.max(0, dt))
+      const targetRotation = Quaternion.fromEulerDegrees(0, predictedPose.yawDegrees, 0)
+
+      transform.position = Vector3.create(
+        transform.position.x + (predictedPose.x - transform.position.x) * followAmount,
+        groundedY ?? transform.position.y,
+        transform.position.z + (predictedPose.z - transform.position.z) * followAmount
+      )
+      transform.rotation = Quaternion.slerp(transform.rotation, targetRotation, followAmount)
+      serverPoseTarget.snapPending = false
+      patrol.currentAction = getNpcActionFromServer(serverAction)
+      patrol.speed = serverAction === 'run'
+        ? PLAYER_RUN_SPEED
+        : serverAction === 'idle' || serverAction === 'bonk'
+          ? 0
+          : PLAYER_WALK_SPEED
+      syncNpcAnimation(entity)
+      updateNpcVisualOffset(entity)
+
+      if (patrol.labelEntity) {
+        const labelTransform = Transform.getMutable(patrol.labelEntity as Entity)
+        labelTransform.position = Vector3.create(
+          transform.position.x,
+          transform.position.y + NPC_LABEL_Y,
+          transform.position.z
+        )
+      }
+      continue
+    }
+
     const idx = patrol.waypointIndex
     if (idx >= waypoints.count) {
       patrol.waypointIndex = 0
@@ -809,10 +906,18 @@ export function npcPatrolSystem(dt: number): void {
 
 function getGroundHeight(entity: Entity): number | null {
   const result = RaycastResult.getOrNull(entity)
-  if (!result || result.hits.length === 0) return null
+  if (!result || result.hits.length === 0) return NPC_ARENA_GROUND_Y
   const hit = result.hits[0]
-  if (!hit || !hit.position) return null
-  return hit.position.y
+  if (!hit || !hit.position) return NPC_ARENA_GROUND_Y
+
+  // MoonLobby includes high decorative colliders. NPCs must only ground on
+  // the floor band, otherwise a downward ray can lift them into the sky.
+  const groundY = hit.position.y
+  if (groundY < NPC_GROUND_MIN_Y || groundY > NPC_GROUND_MAX_Y) {
+    return NPC_ARENA_GROUND_Y
+  }
+
+  return groundY
 }
 
 function updateNpcObstacleProbeDirection(entity: Entity, normalizedDirection: Vector3): void {

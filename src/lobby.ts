@@ -26,10 +26,16 @@ import {
   requestServerRoomLeave,
   requestServerRoomSnapshot,
 } from './client/serverRoomClient'
-import { resetServerPublicMatchSnapshot } from './client/serverPublicStateClient'
+import {
+  canLocalServerPlayerAct,
+  getLocalServerPlayerStatus,
+  isLocalSpectatorPresentation,
+  resetServerPublicMatchSnapshot,
+} from './client/serverPublicStateClient'
 import { resetLeaderboardAward } from './client/leaderboardClient'
 import { setLeaderboardBoardVisible } from './client/leaderboardBoard'
 import { startGameMusic, stopGameAudio } from './client/gameAudio'
+import { updateMobileNativeGameplayControls } from './client/mobileNativeControls'
 
 // Lobby position
 const LOBBY_X = 48
@@ -41,15 +47,16 @@ const LOBBY_HIDDEN_Y = -100
 const LOBBY_HIDDEN_Z = 1000
 const PLAYER_SPAWN_Y = 1.2
 const DESKTOP_LOBBY_MODEL_SRC = 'models/MoonLobby1.glb'
-const MOBILE_LOBBY_MODEL_SRC = 'models/MoonLobby1Mobile.glb'
+const MOBILE_LOBBY_MODEL_SRC = 'models/MoonLobby1Mobile2.glb'
 const DESKTOP_START_BUTTON_MODEL_SRC = 'models/roblox_doge_hat.glb'
-const MOBILE_START_BUTTON_MODEL_SRC = 'models/roblox_doge_hat_Mobile.glb'
+const MOBILE_START_BUTTON_MODEL_SRC = 'models/roblox_doge_hat_Mobile2.glb'
 
 let lobbyRoot: Entity | null = null
 let lobbyModelEntity: Entity | null = null
 let startButtonEntity: Entity | null = null
 let lobbyLabelEntity: Entity | null = null
 let lastLobbyLabelText = ''
+let lastLobbyLabelVisible = true
 
 function getLobbyModelSrc(): string {
   return isMobile() ? MOBILE_LOBBY_MODEL_SRC : DESKTOP_LOBBY_MODEL_SRC
@@ -178,23 +185,34 @@ export function createLobby(): void {
 /** Start local match from the waiting room. */
 export function startLocalMatchFromLobby(
   matchConfig: LocalMatchConfig,
-  runtimeSeed?: LocalMatchRuntimeSeed
+  runtimeSeed?: LocalMatchRuntimeSeed,
+  isResume = false
 ): void {
-  console.log('[Lobby] Starting local match...', matchConfig)
+  console.log(`[Lobby] ${isResume ? 'Resuming' : 'Starting'} local match...`, matchConfig)
 
   // Build gameplay space first, then flip into PLAYING so systems don't see a half-initialized round.
   uiState.showRoomEntry = false
   uiState.showWaitingRoom = false
   startGame(matchConfig, runtimeSeed)
   setState(GameState.PLAYING)
+  // Do not rely solely on the per-frame monitor: apply the mobile gamepad
+  // configuration at the same confirmed transition that starts the round.
+  updateMobileNativeGameplayControls({
+    isPlaying: true,
+    canAct: canLocalServerPlayerAct(),
+    playerStatus: getLocalServerPlayerStatus(),
+    isSpectating: isLocalSpectatorPresentation(),
+  })
   setLobbyVisible(false)
   setLeaderboardBoardVisible(false)
   startGameMusic()
-  const spawnPoint = matchConfig.localSpawnPoint
-  movePlayerTo({
-    newRelativePosition: spawnPoint?.position ?? { x: 48, y: PLAYER_SPAWN_Y, z: 48 },
-    cameraTarget: spawnPoint?.cameraTarget,
-  })
+  if (!isResume) {
+    const spawnPoint = matchConfig.localSpawnPoint
+    movePlayerTo({
+      newRelativePosition: spawnPoint?.position ?? { x: 48, y: PLAYER_SPAWN_Y, z: 48 },
+      cameraTarget: spawnPoint?.cameraTarget,
+    })
+  }
   // Mobile keeps Explorer's native camera. The custom VirtualCamera is only
   // useful on desktop and can become unstable around mobile collider edges.
   if (!isMobile()) {
@@ -246,6 +264,17 @@ export function returnToLobby(): void {
 
 function updateLobbyLabelText(): void {
   if (!lobbyLabelEntity || !TextShape.has(lobbyLabelEntity)) return
+
+  // The screen-space Waiting Room is the active interaction surface. Keeping
+  // the in-world three-line lobby prompt visible behind it makes the mobile
+  // title and first roster row look crowded, even when their own layout fits.
+  const shouldShowLabel = !uiState.showWaitingRoom
+  if (shouldShowLabel !== lastLobbyLabelVisible) {
+    VisibilityComponent.createOrReplace(lobbyLabelEntity, { visible: shouldShowLabel })
+    lastLobbyLabelVisible = shouldShowLabel
+  }
+
+  if (!shouldShowLabel) return
 
   const nextText = getLobbyLabelText()
   if (nextText === lastLobbyLabelText) return
