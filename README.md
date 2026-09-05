@@ -51,6 +51,7 @@ Build success does not replace manual Creator Hub, mobile, or two-player multipl
 
 ## Configuration
 
-- Decentraland SDK7 with `@dcl/react-ecs`
+- Required SDK7 release: `7.26.1-32239895147.commit-3c77d90` for `@dcl/sdk`, `@dcl/js-runtime`, and `@dcl/sdk-commands`. Keep all three packages on the same release; this project needs its scene-side multiplayer server support.
+- UI: `@dcl/react-ecs`
 - World: `playandearn.dcl.eth`
 - Server multiplayer enabled in `scene.json`

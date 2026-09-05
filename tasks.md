@@ -6,6 +6,7 @@ This document records all development tasks and progress for the Doge Hunt proje
 
 | Date | Task | Status | Owner | Notes |
 |---|---|---|---|---|
+| 2026-09-05 | Document the required server-multiplayer SDK release | Ready for review | Codex | README now pins `@dcl/sdk`, `@dcl/js-runtime`, and `@dcl/sdk-commands` to `7.26.1-32239895147.commit-3c77d90`, requiring the three packages to remain aligned because the scene needs server multiplayer support. Markdown diff check passes. |
 | 2026-09-05 | Exclude local AI and Trae project settings from Git | Ready for review | Codex | Added ignore rules for `.codex/`, `.trae/`, and `.agents/`. Removed all tracked `.trae` documents/rules and `.agents` skills from the Git index without deleting local files. Ignore and staged/unstaged diff checks pass. |
 | 2026-09-05 | Simplify README multiplayer terminology | Ready for review | Codex | Replaced reader-facing authoritative wording with plain server-controlled wording in README. Runtime configuration and code are unchanged; README scan and Markdown diff check pass. |
 | 2026-09-05 | Simplify the project README | Ready for review | Codex | Reduced README to 40 lines covering the product summary, essential play rules, room/spectator limits, points, commands, and verification boundary. Removed the detailed implementation map and long manual test matrix. Markdown diff checks pass. |
