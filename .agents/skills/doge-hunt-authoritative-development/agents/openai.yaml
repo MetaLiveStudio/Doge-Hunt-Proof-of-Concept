@@ -1,4 +1,0 @@
-interface:
-  display_name: "Doge Hunt Development"
-  short_description: "Operate and verify Doge Hunt multiplayer changes."
-  default_prompt: "Use $doge-hunt-authoritative-development to implement and verify a Doge Hunt multiplayer change."
