@@ -1,4 +1,11 @@
 .dcl-npm-cache/
+node_modules/
+.editor/
+dclcontext/
+thumbnails/
+skills-lock.json
+SCENE_README.md
+npm.cmd
 .codex/
 .codex-*/
 .trae/

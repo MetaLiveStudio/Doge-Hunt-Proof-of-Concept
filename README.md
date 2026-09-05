@@ -39,6 +39,8 @@ npm run deploy
 npm run server-logs
 ```
 
+`npm install` restores dependencies from `package-lock.json`. Do not commit `node_modules/` or local editor, AI-context, thumbnail, and tool-wrapper files; they are intentionally ignored.
+
 Run before submitting changes:
 
 ```bash
