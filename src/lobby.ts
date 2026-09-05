@@ -9,6 +9,7 @@ import {
   TextShape, Billboard, BillboardMode,
 } from '@dcl/sdk/ecs'
 import { Vector3, Color4 } from '@dcl/sdk/math'
+import { isMobile } from '@dcl/sdk/platform'
 import { movePlayerTo } from '~system/RestrictedActions'
 import { GameState, setState } from './gameState'
 import { startGame } from './index'
@@ -19,7 +20,22 @@ import { enableFollowCamera, disableFollowCamera } from './cameraRig'
 import { leaveLocalRoom } from './localRoom'
 import { endLocalMatch } from './localMatch'
 import type { LocalMatchConfig } from './localMatch'
-import { resetLocalMatchRuntimeState } from './localMatchState'
+import { resetLocalMatchRuntimeState, type LocalMatchRuntimeSeed } from './localMatchState'
+import {
+  getLobbyRoomPrompt,
+  requestServerRoomLeave,
+  requestServerRoomSnapshot,
+} from './client/serverRoomClient'
+import {
+  canLocalServerPlayerAct,
+  getLocalServerPlayerStatus,
+  isLocalSpectatorPresentation,
+  resetServerPublicMatchSnapshot,
+} from './client/serverPublicStateClient'
+import { resetLeaderboardAward } from './client/leaderboardClient'
+import { setLeaderboardBoardVisible } from './client/leaderboardBoard'
+import { startGameMusic, stopGameAudio } from './client/gameAudio'
+import { updateMobileNativeGameplayControls } from './client/mobileNativeControls'
 
 // Lobby position
 const LOBBY_X = 48
@@ -30,11 +46,25 @@ const LOBBY_HIDDEN_X = 1000
 const LOBBY_HIDDEN_Y = -100
 const LOBBY_HIDDEN_Z = 1000
 const PLAYER_SPAWN_Y = 1.2
+const DESKTOP_LOBBY_MODEL_SRC = 'models/MoonLobby1.glb'
+const MOBILE_LOBBY_MODEL_SRC = 'models/MoonLobby1Mobile2.glb'
+const DESKTOP_START_BUTTON_MODEL_SRC = 'models/roblox_doge_hat.glb'
+const MOBILE_START_BUTTON_MODEL_SRC = 'models/roblox_doge_hat_Mobile2.glb'
 
 let lobbyRoot: Entity | null = null
 let lobbyModelEntity: Entity | null = null
 let startButtonEntity: Entity | null = null
 let lobbyLabelEntity: Entity | null = null
+let lastLobbyLabelText = ''
+let lastLobbyLabelVisible = true
+
+function getLobbyModelSrc(): string {
+  return isMobile() ? MOBILE_LOBBY_MODEL_SRC : DESKTOP_LOBBY_MODEL_SRC
+}
+
+function getStartButtonModelSrc(): string {
+  return isMobile() ? MOBILE_START_BUTTON_MODEL_SRC : DESKTOP_START_BUTTON_MODEL_SRC
+}
 
 function setLobbyVisible(visible: boolean): void {
   if (lobbyRoot) {
@@ -74,7 +104,7 @@ export function createLobby(): void {
     scale: Vector3.create(1, 1, 1),
   })
   GltfContainer.create(lobbyModelEntity, {
-    src: 'models/MoonLobby1.glb',
+    src: getLobbyModelSrc(),
     // Prefer the model's dedicated collider meshes over the visible geometry.
     invisibleMeshesCollisionMask: ColliderLayer.CL_PHYSICS,
   })
@@ -89,7 +119,7 @@ export function createLobby(): void {
   })
   MeshCollider.setBox(startButtonEntity)
   GltfContainer.create(startButtonEntity, {
-    src: 'models/roblox_doge_hat.glb',
+    src: getStartButtonModelSrc(),
     visibleMeshesCollisionMask: ColliderLayer.CL_PHYSICS | ColliderLayer.CL_POINTER,
   })
   
@@ -108,6 +138,7 @@ export function createLobby(): void {
     (event) => {
       console.log('[Lobby] ✅ BUTTON CLICKED!', event)
       uiState.showRoomEntry = true
+      requestServerRoomSnapshot()
       console.log('[Lobby] showRoomEntry set to:', uiState.showRoomEntry)
     }
   )
@@ -121,7 +152,7 @@ export function createLobby(): void {
     position: Vector3.create(0, 4.2, 0),
   })
   TextShape.create(lobbyLabelEntity, {
-    text: 'DOGE HUNT\nClick to Play Game',
+    text: getLobbyLabelText(),
     fontSize: 5,
     textColor: Color4.create(1, 0.84, 0, 1),
     outlineColor: Color4.create(0, 0, 0, 1),
@@ -130,6 +161,7 @@ export function createLobby(): void {
   Billboard.create(lobbyLabelEntity, { billboardMode: BillboardMode.BM_Y })
   VisibilityComponent.create(lobbyLabelEntity, { visible: true })
   VisibilityComponent.create(startButtonEntity, { visible: true })
+  requestServerRoomSnapshot()
 
   // Rotating animation system
   engine.addSystem((dt: number) => {
@@ -145,21 +177,47 @@ export function createLobby(): void {
         w: Math.cos(newAngle / 2),
       }
     }
+
+    updateLobbyLabelText()
   })
 }
 
 /** Start local match from the waiting room. */
-export function startLocalMatchFromLobby(matchConfig: LocalMatchConfig): void {
-  console.log('[Lobby] Starting local match...', matchConfig)
+export function startLocalMatchFromLobby(
+  matchConfig: LocalMatchConfig,
+  runtimeSeed?: LocalMatchRuntimeSeed,
+  isResume = false
+): void {
+  console.log(`[Lobby] ${isResume ? 'Resuming' : 'Starting'} local match...`, matchConfig)
 
   // Build gameplay space first, then flip into PLAYING so systems don't see a half-initialized round.
-  startGame(matchConfig)
+  uiState.showRoomEntry = false
+  uiState.showWaitingRoom = false
+  startGame(matchConfig, runtimeSeed)
   setState(GameState.PLAYING)
-  setLobbyVisible(false)
-  movePlayerTo({
-    newRelativePosition: { x: 48, y: PLAYER_SPAWN_Y, z: 48 },
+  // Do not rely solely on the per-frame monitor: apply the mobile gamepad
+  // configuration at the same confirmed transition that starts the round.
+  updateMobileNativeGameplayControls({
+    isPlaying: true,
+    canAct: canLocalServerPlayerAct(),
+    playerStatus: getLocalServerPlayerStatus(),
+    isSpectating: isLocalSpectatorPresentation(),
   })
-  enableFollowCamera()
+  setLobbyVisible(false)
+  setLeaderboardBoardVisible(false)
+  startGameMusic()
+  if (!isResume) {
+    const spawnPoint = matchConfig.localSpawnPoint
+    movePlayerTo({
+      newRelativePosition: spawnPoint?.position ?? { x: 48, y: PLAYER_SPAWN_Y, z: 48 },
+      cameraTarget: spawnPoint?.cameraTarget,
+    })
+  }
+  // Mobile keeps Explorer's native camera. The custom VirtualCamera is only
+  // useful on desktop and can become unstable around mobile collider edges.
+  if (!isMobile()) {
+    enableFollowCamera()
+  }
 }
 
 /** Return to lobby */
@@ -168,6 +226,7 @@ export function returnToLobby(): void {
   
   // Clean up game entities
   console.log('[Lobby] Step 1: Cleaning up game entities...')
+  stopGameAudio()
   cleanupGame()
   
   // Reset game state variables
@@ -177,7 +236,10 @@ export function returnToLobby(): void {
   // Teleport player back to lobby
   console.log('[Lobby] Step 3: Teleporting player to lobby...')
   setLobbyVisible(true)
-  disableFollowCamera()
+  setLeaderboardBoardVisible(true)
+  if (!isMobile()) {
+    disableFollowCamera()
+  }
   movePlayerTo({
     newRelativePosition: { x: LOBBY_RETURN_X, y: PLAYER_SPAWN_Y, z: LOBBY_RETURN_Z },
   })
@@ -189,10 +251,44 @@ export function returnToLobby(): void {
   uiState.showRoomEntry = false
   uiState.showWaitingRoom = false
   uiState.showGameOver = false
+  requestServerRoomLeave('return-to-lobby')
   leaveLocalRoom()
   endLocalMatch()
   resetLocalMatchRuntimeState()
+  resetServerPublicMatchSnapshot()
+  resetLeaderboardAward()
   hideHud()
   
   console.log('[Lobby] ========== RETURN TO LOBBY COMPLETE ==========')
+}
+
+function updateLobbyLabelText(): void {
+  if (!lobbyLabelEntity || !TextShape.has(lobbyLabelEntity)) return
+
+  // The screen-space Waiting Room is the active interaction surface. Keeping
+  // the in-world three-line lobby prompt visible behind it makes the mobile
+  // title and first roster row look crowded, even when their own layout fits.
+  const shouldShowLabel = !uiState.showWaitingRoom
+  if (shouldShowLabel !== lastLobbyLabelVisible) {
+    VisibilityComponent.createOrReplace(lobbyLabelEntity, { visible: shouldShowLabel })
+    lastLobbyLabelVisible = shouldShowLabel
+  }
+
+  if (!shouldShowLabel) return
+
+  const nextText = getLobbyLabelText()
+  if (nextText === lastLobbyLabelText) return
+
+  const textShape = TextShape.getMutable(lobbyLabelEntity)
+  textShape.text = nextText
+  lastLobbyLabelText = nextText
+}
+
+function getLobbyLabelText(): string {
+  const prompt = getLobbyRoomPrompt()
+  if (!prompt.actionLabel) {
+    return `DOGE HUNT\n${prompt.statusLabel}`
+  }
+
+  return `DOGE HUNT\n${prompt.actionLabel}\n${prompt.statusLabel}`
 }

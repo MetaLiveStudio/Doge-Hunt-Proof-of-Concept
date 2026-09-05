@@ -8,6 +8,7 @@ import { hideHud } from './hud'
 export function showGameOverUI(): void {
   console.log('[GameOver] Showing game over UI')
   hideHud()  // Hide HUD first!
+  uiState.resultPage = 0
   uiState.showGameOver = true
   setState(GameState.GAME_OVER)
 }

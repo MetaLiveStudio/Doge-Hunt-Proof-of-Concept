@@ -6,21 +6,31 @@ import {
   engine, Transform, Entity,
   AvatarLocomotionSettings,
   AvatarModifierArea, AvatarModifierType,
-  GltfContainer, Animator, InputModifier,
+  GltfContainer, Animator, ColliderLayer, InputModifier,
   InputAction, PointerEventType, inputSystem,
 } from '@dcl/sdk/ecs'
-import { getPlatform } from '@dcl/sdk/platform'
-import { Quaternion, Vector3 } from '@dcl/sdk/math'
+import { getPlatform, isMobile } from '@dcl/sdk/platform'
+import { Vector3 } from '@dcl/sdk/math'
 import { isPlayerDisguised } from './skills'
 
 const CX = 48
 const CZ = 48
-const ARENA_SIZE = 92
+const AVATAR_HIDE_AREA_SIZE = 110
+const AVATAR_HIDE_AREA_HEIGHT = 40
+const AVATAR_HIDE_AREA_CENTER_Y = 10
+const AVATAR_HIDE_REFRESH_X = 1000
+const AVATAR_HIDE_REFRESH_Y = -100
+const AVATAR_HIDE_REFRESH_Z = 1000
+const AVATAR_HIDE_RELEASE_DELAY_SECONDS = 0.75
+// The current SDK declaration predates the Explorer name-tag modifier value.
+const AMT_HIDE_NAME_TAGS = 2 as AvatarModifierType
 
 // Exported so skills.ts can reference it
 export let dogeBodyEntity: number = 0
 let modifierEntity: Entity | null = null
 let followSystemInitialized = false
+let modifierCleanupSystemInitialized = false
+let modifierReleaseTimer = 0
 let attackAnimationSystemInitialized = false
 let attackAnimationTimer = 0
 let attackMovementLockTimer = 0
@@ -32,18 +42,43 @@ let jumpActive = false
 let currentPlayerAnimation: string | null = null
 let lastPlayerPosition: Vector3 | null = null
 let mobilePlanarSpeed = 0
+let spectatorVisualHidden = false
 const PLAYER_ATTACK_CLIP = 'Bonk'
 const PLAYER_IDLE_CLIP = 'idel'
 const PLAYER_JUMP_CLIP = 'jump'
 const PLAYER_WALK_CLIP = 'walk'
 const PLAYER_RUN_CLIP = 'run'
-export const PLAYER_ATTACK_ANIMATION_SPEED = 1.82
-export const PLAYER_ATTACK_IMPACT_TIME = 0.25
-export const PLAYER_ATTACK_TOTAL_DURATION = 1.26
-const PLAYER_ATTACK_MOVE_LOCK_DURATION = 1
+const DESKTOP_PLAYER_DOGE_MODEL = 'models/Muscledoge.glb'
+const MOBILE_PLAYER_DOGE_MODEL = 'models/MuscledogeMobile2.glb'
+const PLAYER_DEAD_DOGE_MODEL = 'models/SmallDoge.glb'
+const DESKTOP_PLAYER_DOGE_SCALE = Vector3.create(1.5, 1.5, 1.5)
+const MOBILE_PLAYER_DOGE_SCALE = Vector3.create(1.05, 1.05, 1.05)
+const PLAYER_DEAD_DOGE_SCALE = Vector3.create(0.5, 0.5, 0.5)
+const PLAYER_ELIMINATION_SQUASH_DURATION = 0.25
+const PLAYER_ELIMINATION_SMALL_DOGE_SECONDS = 0.55
+const PLAYER_ELIMINATION_MIN_HEIGHT_SCALE = 0.2
+const PLAYER_ELIMINATION_FLATTEN_SCALE = 1.35
+export const PLAYER_ATTACK_ANIMATION_SPEED = 2.25
+export const PLAYER_ATTACK_IMPACT_TIME = 0.18
+
+function getPlayerDogeModelSrc(): string {
+  return getPlatform() === 'mobile'
+    ? MOBILE_PLAYER_DOGE_MODEL
+    : DESKTOP_PLAYER_DOGE_MODEL
+}
+
+function getPlayerDogeScale(): Vector3 {
+  return getPlatform() === 'mobile'
+    ? MOBILE_PLAYER_DOGE_SCALE
+    : DESKTOP_PLAYER_DOGE_SCALE
+}
+// Explorer's runtime keeps this GLB action active for the original full
+// lifecycle even at the visual playback speed below. Shortening it cuts off
+// the visible swing, so local and remote presentation share this duration.
+export const PLAYER_ATTACK_TOTAL_DURATION = 1.02
+const PLAYER_ATTACK_MOVE_LOCK_DURATION = PLAYER_ATTACK_TOTAL_DURATION
 const PLAYER_JUMP_DURATION = 1.433
 const PLAYER_JUMP_HEIGHT = 1.15
-const PLAYER_TURN_SPEED_DEGREES = 240
 const PLAYER_JUMP_ANIMATION_SPEED = 1
 const PLAYER_WALK_ANIMATION_SPEED = 1
 const PLAYER_RUN_ANIMATION_SPEED = 1.15
@@ -54,10 +89,15 @@ const PLAYER_MOBILE_IDLE_SPEED_THRESHOLD = 0.15
 const PLAYER_MOBILE_RUN_SPEED_THRESHOLD = 8
 const PLAYER_MOBILE_SPEED_SMOOTHING = 12
 
+type SpectatorEliminationVisualState = 'none' | 'squash' | 'small' | 'hidden'
+let spectatorEliminationVisualState: SpectatorEliminationVisualState = 'none'
+let spectatorEliminationTimer = 0
+let spectatorEliminationSmallTimer = 0
+
 function applyGameplayInputRestrictions(): void {
   InputModifier.createOrReplace(engine.PlayerEntity, {
     mode: InputModifier.Mode.Standard({
-      disableAll: skillMovementLocked,
+      disableAll: attackMovementLocked || skillMovementLocked,
       disableDoubleJump: true,
       disableGliding: true,
     }),
@@ -96,31 +136,43 @@ export function setSkillMovementLocked(locked: boolean): void {
 
 /** Set up the player's Doge disguise */
 export function setupPlayerDisguise(): void {
+  forceRemoveAvatarHideModifierArea('setup')
   setAttackMovementLocked(false)
   setSkillMovementLocked(false)
+  spectatorVisualHidden = false
+  spectatorEliminationVisualState = 'none'
+  spectatorEliminationTimer = 0
+  spectatorEliminationSmallTimer = 0
   lastPlayerPosition = null
   mobilePlanarSpeed = 0
   syncPlayerMovementRestrictions()
 
-  // 1. AvatarModifierArea — hides real player avatar in the arena only
+  // 1. AvatarModifierArea — hides default avatars across the active match scene.
   modifierEntity = engine.addEntity()
   Transform.create(modifierEntity, {
-    position: Vector3.create(CX, 2, CZ),
+    position: Vector3.create(CX, AVATAR_HIDE_AREA_CENTER_Y, CZ),
   })
   AvatarModifierArea.create(modifierEntity, {
-    area: Vector3.create(ARENA_SIZE, 8, ARENA_SIZE), // Only arena area, not lobby
-    modifiers: [AvatarModifierType.AMT_HIDE_AVATARS],
+    area: Vector3.create(AVATAR_HIDE_AREA_SIZE, AVATAR_HIDE_AREA_HEIGHT, AVATAR_HIDE_AREA_SIZE),
+    modifiers: getArenaAvatarModifiers(),
     excludeIds: [],
   })
+  modifierReleaseTimer = 0
+  ensureModifierCleanupSystem()
 
   // 2. Doge body (with bat) — Muscledoge.glb follows the player
   const dogeBody = engine.addEntity()
   dogeBodyEntity = dogeBody as number
   Transform.create(dogeBody, {
     position: Vector3.create(CX, 0, CZ),
-    scale: Vector3.create(1.5, 1.5, 1.5),
+    scale: getPlayerDogeScale(),
   })
-  GltfContainer.create(dogeBody, { src: 'models/Muscledoge.glb' })
+  GltfContainer.create(dogeBody, {
+    src: getPlayerDogeModelSrc(),
+    visibleMeshesCollisionMask: ColliderLayer.CL_NONE,
+    invisibleMeshesCollisionMask: ColliderLayer.CL_NONE,
+  })
+  disableDogeBodyCollision()
   Animator.create(dogeBody, {
     states: [
       {
@@ -170,6 +222,10 @@ export function setupPlayerDisguise(): void {
 
       // Don't follow when disguised as pillar
       if (isPlayerDisguised()) return
+      if (spectatorVisualHidden) {
+        updateSpectatorEliminationVisual(dt)
+        return
+      }
 
       const playerTransform = Transform.getOrNull(engine.PlayerEntity)
       if (!playerTransform) return
@@ -185,12 +241,12 @@ export function setupPlayerDisguise(): void {
         playerTransform.position.y,
         playerTransform.position.z
       )
+      mutableTransform.scale = getPlayerDogeScale()
 
-      const currentYaw = getYawFromRotation(mutableTransform.rotation)
-      const targetYaw = getYawFromRotation(playerTransform.rotation)
-      const maxYawStep = PLAYER_TURN_SPEED_DEGREES * dt
-      const nextYaw = approachAngle(currentYaw, targetYaw, maxYawStep)
-      mutableTransform.rotation = Quaternion.fromEulerDegrees(0, nextYaw, 0)
+      // The Doge is a presentation replacement for the local DCL avatar, so
+      // it must share its orientation immediately. Smoothing here made fast
+      // turns visibly lag behind the avatar even though positions matched.
+      mutableTransform.rotation = playerTransform.rotation
       syncPlayerAnimation()
     })
   }
@@ -240,25 +296,230 @@ export function setupPlayerDisguise(): void {
   }
 }
 
-function getYawFromRotation(rotation: Quaternion): number {
-  const forward = Vector3.rotate(Vector3.Forward(), rotation)
-  return Math.atan2(forward.x, forward.z) * (180 / Math.PI)
-}
+export function setPlayerSpectatorVisualHidden(hidden: boolean): void {
+  if (spectatorVisualHidden === hidden) return
 
-function approachAngle(current: number, target: number, maxDelta: number): number {
-  const delta = wrapAngleDegrees(target - current)
-  if (Math.abs(delta) <= maxDelta) {
-    return current + delta
+  spectatorVisualHidden = hidden
+  disableDogeBodyCollision()
+  if (hidden) {
+    attackAnimationTimer = 0
+    attackMovementLockTimer = 0
+    setAttackMovementLocked(false)
+    startSpectatorEliminationVisual()
+    console.log('[Client][T] spectator visual hidden')
+    return
   }
 
-  return current + Math.sign(delta) * maxDelta
+  resetDogeBodyModel()
+  spectatorEliminationVisualState = 'none'
+  spectatorEliminationTimer = 0
+  spectatorEliminationSmallTimer = 0
+  showDogeBodyVisual()
+  console.log('[Client][T] spectator visual restored')
 }
 
-function wrapAngleDegrees(angle: number): number {
-  let wrapped = angle
-  while (wrapped > 180) wrapped -= 360
-  while (wrapped < -180) wrapped += 360
-  return wrapped
+export function releasePlayerAvatarVisibility(): void {
+  releaseAvatarHideModifierArea()
+}
+
+function ensureModifierCleanupSystem(): void {
+  if (modifierCleanupSystemInitialized) return
+
+  modifierCleanupSystemInitialized = true
+  engine.addSystem((dt) => {
+    if (!modifierEntity || modifierReleaseTimer <= 0) return
+
+    modifierReleaseTimer = Math.max(0, modifierReleaseTimer - dt)
+    if (modifierReleaseTimer > 0) return
+
+    forceRemoveAvatarHideModifierArea('delayed-release')
+  })
+}
+
+function releaseAvatarHideModifierArea(): void {
+  if (!modifierEntity) return
+
+  if (Transform.has(modifierEntity)) {
+    const transform = Transform.getMutable(modifierEntity)
+    transform.position = Vector3.create(
+      AVATAR_HIDE_REFRESH_X,
+      AVATAR_HIDE_REFRESH_Y,
+      AVATAR_HIDE_REFRESH_Z
+    )
+  }
+
+  if (AvatarModifierArea.has(modifierEntity)) {
+    AvatarModifierArea.createOrReplace(modifierEntity, {
+      area: Vector3.create(0.1, 0.1, 0.1),
+      modifiers: getArenaAvatarModifiers(),
+      excludeIds: [],
+    })
+  }
+
+  modifierReleaseTimer = AVATAR_HIDE_RELEASE_DELAY_SECONDS
+  ensureModifierCleanupSystem()
+  console.log('[Player] Avatar visibility modifier moved away for refresh')
+}
+
+function disableDogeBodyCollision(): void {
+  const dogeEntity = dogeBodyEntity as Entity
+  if (!dogeBodyEntity || !GltfContainer.has(dogeEntity)) return
+
+  const gltf = GltfContainer.getMutable(dogeEntity)
+  gltf.visibleMeshesCollisionMask = ColliderLayer.CL_NONE
+  gltf.invisibleMeshesCollisionMask = ColliderLayer.CL_NONE
+}
+
+function getArenaAvatarModifiers(): AvatarModifierType[] {
+  return [
+    AvatarModifierType.AMT_HIDE_AVATARS,
+    AvatarModifierType.AMT_DISABLE_PASSPORTS,
+    AMT_HIDE_NAME_TAGS,
+  ]
+}
+
+function forceRemoveAvatarHideModifierArea(reason: string): void {
+  if (!modifierEntity) return
+
+  if (AvatarModifierArea.has(modifierEntity)) {
+    AvatarModifierArea.deleteFrom(modifierEntity)
+  }
+  engine.removeEntity(modifierEntity)
+  modifierEntity = null
+  modifierReleaseTimer = 0
+  console.log(`[Player] Avatar visibility modifier removed reason=${reason}`)
+}
+
+function hideDogeBodyVisual(): void {
+  if (!dogeBodyEntity) return
+  const dogeEntity = dogeBodyEntity as Entity
+  if (!Transform.has(dogeEntity)) return
+
+  const transform = Transform.getMutable(dogeEntity)
+  transform.position = Vector3.create(0, -10, 0)
+  transform.scale = Vector3.create(0, 0, 0)
+}
+
+function showDogeBodyVisual(): void {
+  if (!dogeBodyEntity) return
+  const dogeEntity = dogeBodyEntity as Entity
+  if (!Transform.has(dogeEntity)) return
+
+  const playerTransform = Transform.getOrNull(engine.PlayerEntity)
+  const transform = Transform.getMutable(dogeEntity)
+  transform.scale = getPlayerDogeScale()
+
+  if (playerTransform) {
+    transform.position = Vector3.create(
+      playerTransform.position.x,
+      playerTransform.position.y,
+      playerTransform.position.z
+    )
+  }
+
+  currentPlayerAnimation = null
+  returnToIdlePose()
+}
+
+function resetDogeBodyModel(): void {
+  if (!dogeBodyEntity) return
+  const dogeEntity = dogeBodyEntity as Entity
+  if (GltfContainer.has(dogeEntity)) {
+    const gltf = GltfContainer.getMutable(dogeEntity)
+    gltf.src = getPlayerDogeModelSrc()
+    gltf.visibleMeshesCollisionMask = ColliderLayer.CL_NONE
+    gltf.invisibleMeshesCollisionMask = ColliderLayer.CL_NONE
+  }
+}
+
+function startSpectatorEliminationVisual(): void {
+  if (!dogeBodyEntity) return
+  const dogeEntity = dogeBodyEntity as Entity
+  if (!Transform.has(dogeEntity)) return
+
+  resetDogeBodyModel()
+  if (Animator.has(dogeEntity)) {
+    Animator.stopAllAnimations(dogeEntity)
+  }
+
+  const playerTransform = Transform.getOrNull(engine.PlayerEntity)
+  const transform = Transform.getMutable(dogeEntity)
+  if (playerTransform) {
+    transform.position = Vector3.create(
+      playerTransform.position.x,
+      playerTransform.position.y,
+      playerTransform.position.z
+    )
+    transform.rotation = playerTransform.rotation
+  }
+  transform.scale = getPlayerDogeScale()
+
+  spectatorEliminationVisualState = 'squash'
+  spectatorEliminationTimer = PLAYER_ELIMINATION_SQUASH_DURATION
+  spectatorEliminationSmallTimer = 0
+  applySpectatorEliminationSquash(0)
+}
+
+function updateSpectatorEliminationVisual(dt: number): void {
+  if (!dogeBodyEntity) return
+
+  if (spectatorEliminationVisualState === 'squash') {
+    spectatorEliminationTimer = Math.max(0, spectatorEliminationTimer - dt)
+    const progress = 1 - spectatorEliminationTimer / PLAYER_ELIMINATION_SQUASH_DURATION
+    applySpectatorEliminationSquash(progress)
+    if (spectatorEliminationTimer <= 0) {
+      showSpectatorSmallDoge()
+    }
+    return
+  }
+
+  if (spectatorEliminationVisualState === 'small') {
+    spectatorEliminationSmallTimer = Math.max(0, spectatorEliminationSmallTimer - dt)
+    if (spectatorEliminationSmallTimer <= 0) {
+      spectatorEliminationVisualState = 'hidden'
+      hideDogeBodyVisual()
+    }
+    return
+  }
+
+  if (spectatorEliminationVisualState === 'hidden') {
+    hideDogeBodyVisual()
+  }
+}
+
+function applySpectatorEliminationSquash(progress: number): void {
+  if (!dogeBodyEntity) return
+  const dogeEntity = dogeBodyEntity as Entity
+  if (!Transform.has(dogeEntity)) return
+
+  const clamped = Math.min(1, Math.max(0, progress))
+  const heightScale = 1 - (1 - PLAYER_ELIMINATION_MIN_HEIGHT_SCALE) * clamped
+  const widthScale = 1 + (PLAYER_ELIMINATION_FLATTEN_SCALE - 1) * clamped
+  const transform = Transform.getMutable(dogeEntity)
+  const baseScale = getPlayerDogeScale()
+  transform.scale = Vector3.create(
+    baseScale.x * widthScale,
+    baseScale.y * heightScale,
+    baseScale.z * widthScale
+  )
+}
+
+function showSpectatorSmallDoge(): void {
+  if (!dogeBodyEntity) return
+  const dogeEntity = dogeBodyEntity as Entity
+  if (!Transform.has(dogeEntity)) return
+
+  if (GltfContainer.has(dogeEntity)) {
+    const gltf = GltfContainer.getMutable(dogeEntity)
+    gltf.src = PLAYER_DEAD_DOGE_MODEL
+    gltf.visibleMeshesCollisionMask = ColliderLayer.CL_NONE
+    gltf.invisibleMeshesCollisionMask = ColliderLayer.CL_NONE
+  }
+
+  const transform = Transform.getMutable(dogeEntity)
+  transform.scale = PLAYER_DEAD_DOGE_SCALE
+  spectatorEliminationVisualState = 'small'
+  spectatorEliminationSmallTimer = PLAYER_ELIMINATION_SMALL_DOGE_SECONDS
 }
 
 function syncPlayerAnimation(): void {
@@ -391,6 +652,10 @@ export function cleanupPlayerDisguise(): void {
   attackMovementLockTimer = 0
   attackMovementLocked = false
   skillMovementLocked = false
+  spectatorVisualHidden = false
+  spectatorEliminationVisualState = 'none'
+  spectatorEliminationTimer = 0
+  spectatorEliminationSmallTimer = 0
   jumpActive = false
   jumpElapsed = 0
   lastPlayerPosition = null
@@ -399,10 +664,7 @@ export function cleanupPlayerDisguise(): void {
   InputModifier.deleteFrom(engine.PlayerEntity)
   
   // Remove AvatarModifierArea
-  if (modifierEntity) {
-    engine.removeEntity(modifierEntity)
-    modifierEntity = null
-  }
+  releaseAvatarHideModifierArea()
   
   // Remove Doge body
   if (dogeBodyEntity) {

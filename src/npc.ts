@@ -8,10 +8,17 @@ import {
   GltfContainer, MeshCollider, TextShape, Billboard, BillboardMode,
   ColliderLayer, Raycast, RaycastQueryType, RaycastResult, Animator,
 } from '@dcl/sdk/ecs'
-import { Vector3, Color4 } from '@dcl/sdk/math'
+import { Vector3, Color4, Quaternion } from '@dcl/sdk/math'
+import { isMobile } from '@dcl/sdk/platform'
 import { trackNpc } from './gameReset'
 import { PLAYER_RUN_SPEED, PLAYER_WALK_SPEED } from './player'
 import { getLocalPublicDogeState, recordLocalDogeEliminated } from './localMatchState'
+import {
+  getServerNpcPresentationAction,
+  getServerNpcTransform,
+  type ServerNpcPresentationAction,
+  type ServerNpcSnapshotPayload,
+} from './shared/serverNpcSnapshot'
 
 // --- Custom components ---
 
@@ -36,6 +43,7 @@ export const NpcPatrol = engine.defineComponent('npcPatrol', {
   jumpHeight: Schemas.Float,
   obstacleProbeEntity: Schemas.Int,
   obstacleBlockedCooldown: Schemas.Float,
+  rngState: Schemas.Int,
 })
 
 /** Stores the patrol waypoints per NPC (stored as flat array: x1,z1,x2,z2,...) */
@@ -49,15 +57,29 @@ export const NpcHitbox = engine.defineComponent('npcHitbox', {
 })
 
 // --- Model paths ---
-export const DOGE_MODEL = 'models/Muscledoge.glb'
+const DESKTOP_DOGE_MODEL = 'models/Muscledoge.glb'
+const MOBILE_DOGE_MODEL = 'models/MuscledogeMobile2.glb'
 export const DEAD_DOGE_MODEL = 'models/SmallDoge.glb'
 
-export const NPC_VISUAL_SCALE = Vector3.create(1.5, 1.5, 1.5)
+function getDogeModelSrc(): string {
+  return isMobile() ? MOBILE_DOGE_MODEL : DESKTOP_DOGE_MODEL
+}
+
+const DESKTOP_NPC_VISUAL_SCALE = Vector3.create(1.5, 1.5, 1.5)
+const MOBILE_NPC_VISUAL_SCALE = Vector3.create(1.05, 1.05, 1.05)
+
+function getNpcVisualScale(): Vector3 {
+  return isMobile() ? MOBILE_NPC_VISUAL_SCALE : DESKTOP_NPC_VISUAL_SCALE
+}
+
 export const NPC_HITBOX_OFFSET = Vector3.create(0, 1.3, 0)
 export const NPC_HITBOX_SCALE = Vector3.create(3.2, 3.2, 3.2)
 export const NPC_DEAD_VISUAL_SCALE = Vector3.create(0.5, 0.5, 0.5)
 const NPC_GROUND_RAY_OFFSET = Vector3.create(0, 6, 0)
 const NPC_GROUND_RAY_MAX_DISTANCE = 20
+const NPC_ARENA_GROUND_Y = 0
+const NPC_GROUND_MIN_Y = -1
+const NPC_GROUND_MAX_Y = 1.25
 const NPC_OBSTACLE_PROBE_OFFSET = Vector3.create(0, 1.15, 0)
 const NPC_OBSTACLE_RAY_MAX_DISTANCE = 1.5
 const NPC_OBSTACLE_BLOCK_DISTANCE = 1.1
@@ -74,10 +96,9 @@ const NPC_JUMP_ANIMATION_SPEED = 1.05
 const NPC_WAYPOINT_REACHED_DISTANCE = 0.3
 const NPC_VISUAL_JUMP_MOVE_SPEED = 1.2
 const DEAD_DOGE_ANIMATION_CLIP = 'Animation'
-const NPC_ELIMINATION_SQUASH_DURATION = 0.5
+const NPC_ELIMINATION_SQUASH_DURATION = 0.25
 const NPC_ELIMINATION_MIN_HEIGHT_SCALE = 0.2
 const NPC_ELIMINATION_FLATTEN_SCALE = 1.35
-
 const enum NpcAction {
   Idle = 0,
   Walk = 1,
@@ -86,28 +107,67 @@ const enum NpcAction {
   Jump = 4,
 }
 
-// --- Arena bounds ---
+function getNpcActionFromServer(action: ServerNpcPresentationAction): NpcAction {
+  switch (action) {
+    case 'idle': return NpcAction.Idle
+    case 'run': return NpcAction.Run
+    case 'jump': return NpcAction.Jump
+    case 'bonk': return NpcAction.Bonk
+    case 'walk':
+    default:
+      return NpcAction.Walk
+  }
+}
+
+// --- NPC activity area ---
 const CX = 48
 const CZ = 48
-const ARENA_HALF = 42
+const NPC_ACTIVITY_RADIUS = 36
 const NPC_LABEL_Y = 3.8
 const NPC_LABEL_FONT_SIZE = 3
+const SERVER_NPC_POSE_FOLLOW_SPEED = 18
+const SERVER_NPC_MAX_EXTRAPOLATION_SECONDS = 0.5
+
+type ServerNpcPoseTarget = {
+  fallbackId: number
+  snapshotElapsedSeconds: number
+  secondsSinceSnapshot: number
+  snapPending: boolean
+  isFrozen: boolean
+}
 
 // --- Alive tracking ---
 export let aliveCount = 0
 export let NPC_TOTAL = 0
 
 const npcPublicDogeIds = new Map<Entity, string>()
+const serverNpcPoseTargets = new Map<string, ServerNpcPoseTarget>()
 
 /** Reset NPC counters */
 export function resetNpcCounters(): void {
   aliveCount = 0
   NPC_TOTAL = 0
   npcPublicDogeIds.clear()
+  serverNpcPoseTargets.clear()
 }
 
 export function getNpcPublicDogeId(entity: Entity): string | null {
   return npcPublicDogeIds.get(entity) ?? null
+}
+
+export function getAliveNpcPublicDogeIds(): string[] {
+  const ids: string[] = []
+
+  for (const [entity, publicDogeId] of npcPublicDogeIds.entries()) {
+    if (!NpcPatrol.has(entity)) continue
+
+    const patrol = NpcPatrol.get(entity)
+    if (patrol.isKnockedOut || patrol.isBeingEliminated) continue
+
+    ids.push(publicDogeId)
+  }
+
+  return ids
 }
 
 export function applyNpcPublicDogePresentation(publicDogeId: string | null, hitOrigin: Vector3): boolean {
@@ -126,13 +186,73 @@ export function applyNpcPublicDogePresentation(publicDogeId: string | null, hitO
   return true
 }
 
-/** Generate random waypoints within the arena */
-function generateWaypoints(count: number): number[] {
+export function applyServerNpcSnapshot(payload: ServerNpcSnapshotPayload): void {
+  let eliminated = 0
+
+  for (let fallbackId = 0; fallbackId < payload.npcs.length; fallbackId++) {
+    const entry = payload.npcs[fallbackId]
+    if (!entry.isEliminated && entry.visualState !== 'eliminated') {
+      const previousTarget = serverNpcPoseTargets.get(entry.publicDogeId)
+      serverNpcPoseTargets.set(entry.publicDogeId, {
+        fallbackId,
+        snapshotElapsedSeconds: payload.elapsedSeconds,
+        secondsSinceSnapshot: 0,
+        snapPending: previousTarget?.snapPending ?? true,
+        isFrozen: payload.isFrozen,
+      })
+    } else {
+      serverNpcPoseTargets.delete(entry.publicDogeId)
+    }
+
+    const npc = getNpcByPublicDogeId(entry.publicDogeId)
+    if (!npc || !NpcPatrol.has(npc) || !Transform.has(npc)) continue
+
+    const patrol = NpcPatrol.get(npc)
+    const transform = Transform.getMutable(npc)
+
+    if (entry.isEliminated || entry.visualState === 'eliminated') {
+      if (!patrol.isKnockedOut && !patrol.isBeingEliminated) {
+        recordLocalDogeEliminated(entry.publicDogeId)
+        startNpcElimination(npc, transform.position)
+        eliminated += 1
+      }
+      continue
+    }
+  }
+
+  if (eliminated > 0) {
+    console.log(`[Client][NPC] authoritative snapshot matchId=${payload.matchId} version=${payload.version} eliminated=${eliminated}`)
+  }
+}
+
+/** Generate uniformly distributed random points inside the circular NPC activity area. */
+function randomActivityPoint(rng: SeededRng): { x: number; z: number } {
+  const angle = nextRandom(rng) * Math.PI * 2
+  const radius = Math.sqrt(nextRandom(rng)) * NPC_ACTIVITY_RADIUS
+
+  return {
+    x: CX + Math.cos(angle) * radius,
+    z: CZ + Math.sin(angle) * radius,
+  }
+}
+
+function clampToActivityArea(position: Vector3): Vector3 {
+  const offsetX = position.x - CX
+  const offsetZ = position.z - CZ
+  const distance = Math.sqrt(offsetX * offsetX + offsetZ * offsetZ)
+
+  if (distance <= NPC_ACTIVITY_RADIUS || distance === 0) return position
+
+  const scale = NPC_ACTIVITY_RADIUS / distance
+  return Vector3.create(CX + offsetX * scale, position.y, CZ + offsetZ * scale)
+}
+
+/** Generate random waypoints within the circular NPC activity area. */
+function generateWaypoints(count: number, rng: SeededRng): number[] {
   const points: number[] = []
   for (let i = 0; i < count; i++) {
-    const x = CX + (Math.random() - 0.5) * 2 * ARENA_HALF
-    const z = CZ + (Math.random() - 0.5) * 2 * ARENA_HALF
-    points.push(x, z)
+    const point = randomActivityPoint(rng)
+    points.push(point.x, point.z)
   }
   return points
 }
@@ -153,8 +273,37 @@ function createLabel(x: number, z: number): Entity {
   return label
 }
 
-function randomRange(min: number, max: number): number {
-  return min + Math.random() * (max - min)
+type SeededRng = {
+  state: number
+}
+
+function randomRange(rng: SeededRng, min: number, max: number): number {
+  return min + nextRandom(rng) * (max - min)
+}
+
+function randomRangeForNpc(entity: Entity, min: number, max: number): number {
+  const patrol = NpcPatrol.getMutable(entity)
+  const rng: SeededRng = { state: patrol.rngState }
+  const value = randomRange(rng, min, max)
+  patrol.rngState = rng.state
+  return value
+}
+
+function nextRandom(rng: SeededRng): number {
+  rng.state = (rng.state * 1664525 + 1013904223) >>> 0
+  return rng.state / 0x100000000
+}
+
+function createNpcSeed(publicDogeId: string, fallbackId: number): number {
+  const source = publicDogeId || `local-npc-${fallbackId}`
+  let hash = 2166136261
+
+  for (let i = 0; i < source.length; i++) {
+    hash ^= source.charCodeAt(i)
+    hash = Math.imul(hash, 16777619)
+  }
+
+  return hash >>> 0
 }
 
 function createNpcObstacleProbe(root: Entity): Entity {
@@ -258,71 +407,73 @@ function setNpcAction(entity: Entity, action: NpcAction, duration: number, speed
 }
 
 function chooseNpcAction(entity: Entity, distanceToTarget: number): void {
-  const patrol = NpcPatrol.get(entity)
-  const roll = Math.random()
+  const patrol = NpcPatrol.getMutable(entity)
+  const rng: SeededRng = { state: patrol.rngState }
+  const roll = nextRandom(rng)
+  patrol.rngState = rng.state
 
   if (distanceToTarget > 12) {
     if (roll < 0.58) {
-      setNpcAction(entity, NpcAction.Walk, randomRange(2.1, 4.2), PLAYER_WALK_SPEED)
+      setNpcAction(entity, NpcAction.Walk, randomRangeForNpc(entity, 2.1, 4.2), PLAYER_WALK_SPEED)
       return
     }
     if (roll < 0.9) {
-      setNpcAction(entity, NpcAction.Run, randomRange(1.4, 2.6), PLAYER_RUN_SPEED)
+      setNpcAction(entity, NpcAction.Run, randomRangeForNpc(entity, 1.4, 2.6), PLAYER_RUN_SPEED)
       return
     }
     if (roll < 0.96) {
-      setNpcAction(entity, NpcAction.Jump, randomRange(0.9, 1.15), PLAYER_WALK_SPEED)
+      setNpcAction(entity, NpcAction.Jump, randomRangeForNpc(entity, 0.9, 1.15), PLAYER_WALK_SPEED)
       return
     }
     if (roll < 0.985) {
-      setNpcAction(entity, NpcAction.Idle, randomRange(0.35, 0.75), 0)
+      setNpcAction(entity, NpcAction.Idle, randomRangeForNpc(entity, 0.35, 0.75), 0)
       return
     }
 
-    setNpcAction(entity, NpcAction.Bonk, randomRange(0.45, 0.8), 0)
+    setNpcAction(entity, NpcAction.Bonk, randomRangeForNpc(entity, 0.45, 0.8), 0)
     return
   }
 
   if (distanceToTarget > 4) {
     if (roll < 0.42) {
-      setNpcAction(entity, NpcAction.Walk, randomRange(1.6, 3.2), PLAYER_WALK_SPEED)
+      setNpcAction(entity, NpcAction.Walk, randomRangeForNpc(entity, 1.6, 3.2), PLAYER_WALK_SPEED)
       return
     }
     if (roll < 0.64) {
-      setNpcAction(entity, NpcAction.Run, randomRange(1.0, 1.9), PLAYER_RUN_SPEED)
+      setNpcAction(entity, NpcAction.Run, randomRangeForNpc(entity, 1.0, 1.9), PLAYER_RUN_SPEED)
       return
     }
     if (roll < 0.79) {
-      setNpcAction(entity, NpcAction.Idle, randomRange(0.45, 1.2), 0)
+      setNpcAction(entity, NpcAction.Idle, randomRangeForNpc(entity, 0.45, 1.2), 0)
       return
     }
     if (roll < 0.9) {
-      setNpcAction(entity, NpcAction.Bonk, randomRange(0.45, 0.85), 0)
+      setNpcAction(entity, NpcAction.Bonk, randomRangeForNpc(entity, 0.45, 0.85), 0)
       return
     }
 
-    setNpcAction(entity, NpcAction.Jump, randomRange(0.85, 1.1), PLAYER_WALK_SPEED)
+    setNpcAction(entity, NpcAction.Jump, randomRangeForNpc(entity, 0.85, 1.1), PLAYER_WALK_SPEED)
     return
   }
 
   if (roll < 0.42) {
-    setNpcAction(entity, NpcAction.Idle, randomRange(0.55, 1.6), 0)
+    setNpcAction(entity, NpcAction.Idle, randomRangeForNpc(entity, 0.55, 1.6), 0)
     return
   }
   if (roll < 0.62) {
-    setNpcAction(entity, NpcAction.Bonk, randomRange(0.45, 0.9), 0)
+    setNpcAction(entity, NpcAction.Bonk, randomRangeForNpc(entity, 0.45, 0.9), 0)
     return
   }
   if (roll < 0.8) {
-    setNpcAction(entity, NpcAction.Jump, randomRange(0.85, 1.15), PLAYER_WALK_SPEED)
+    setNpcAction(entity, NpcAction.Jump, randomRangeForNpc(entity, 0.85, 1.15), PLAYER_WALK_SPEED)
     return
   }
   if (roll < 0.94) {
-    setNpcAction(entity, NpcAction.Walk, randomRange(0.9, 1.8), PLAYER_WALK_SPEED)
+    setNpcAction(entity, NpcAction.Walk, randomRangeForNpc(entity, 0.9, 1.8), PLAYER_WALK_SPEED)
     return
   }
 
-  setNpcAction(entity, NpcAction.Run, randomRange(0.7, 1.2), PLAYER_RUN_SPEED)
+  setNpcAction(entity, NpcAction.Run, randomRangeForNpc(entity, 0.7, 1.2), PLAYER_RUN_SPEED)
 }
 
 function updateNpcVisualOffset(entity: Entity): void {
@@ -331,7 +482,8 @@ function updateNpcVisualOffset(entity: Entity): void {
 
   const visualTransform = Transform.getMutable(patrol.visualEntity as Entity)
   let offsetY = 0
-  let scale = NPC_VISUAL_SCALE
+  const baseScale = getNpcVisualScale()
+  let scale = baseScale
 
   if (patrol.isBeingEliminated && patrol.eliminationDuration > 0.001) {
     const progress = 1 - Math.max(0, patrol.eliminationTimer) / patrol.eliminationDuration
@@ -339,11 +491,11 @@ function updateNpcVisualOffset(entity: Entity): void {
     const heightScale = 1 - (1 - NPC_ELIMINATION_MIN_HEIGHT_SCALE) * clamped
     const widthScale = 1 + (NPC_ELIMINATION_FLATTEN_SCALE - 1) * clamped
     scale = Vector3.create(
-      NPC_VISUAL_SCALE.x * widthScale,
-      NPC_VISUAL_SCALE.y * heightScale,
-      NPC_VISUAL_SCALE.z * widthScale
+      baseScale.x * widthScale,
+      baseScale.y * heightScale,
+      baseScale.z * widthScale
     )
-    offsetY = NPC_VISUAL_SCALE.y * (1 - heightScale) * 0.5
+    offsetY = baseScale.y * (1 - heightScale) * 0.5
   }
 
   visualTransform.scale = scale
@@ -428,11 +580,13 @@ export function finalizeNpcElimination(npcRoot: Entity): void {
 }
 
 /** Spawn a single NPC Doge */
-function spawnNpc(id: number): Entity {
+function spawnNpc(id: number, publicDogeId: string): Entity {
   const root = engine.addEntity()
+  const rng: SeededRng = { state: createNpcSeed(publicDogeId, id) }
 
-  const startX = CX + (Math.random() - 0.5) * 2 * ARENA_HALF
-  const startZ = CZ + (Math.random() - 0.5) * 2 * ARENA_HALF
+  const startPoint = randomActivityPoint(rng)
+  const startX = startPoint.x
+  const startZ = startPoint.z
 
   Transform.create(root, {
     position: Vector3.create(startX, 0, startZ),
@@ -449,9 +603,9 @@ function spawnNpc(id: number): Entity {
   const visual = engine.addEntity()
   Transform.create(visual, {
     parent: root,
-    scale: NPC_VISUAL_SCALE,
+    scale: getNpcVisualScale(),
   })
-  GltfContainer.create(visual, { src: DOGE_MODEL })
+  GltfContainer.create(visual, { src: getDogeModelSrc() })
   createNpcAnimator(visual)
 
   const obstacleProbe = createNpcObstacleProbe(root)
@@ -468,14 +622,14 @@ function spawnNpc(id: number): Entity {
   const label = createLabel(startX, startZ)
 
   // Patrol data
-  const waypoints = generateWaypoints(5)
+  const waypoints = generateWaypoints(5, rng)
   NpcWaypoints.create(root, {
     points: waypoints,
     count: 5,
   })
 
-  const baseSpeed = randomRange(1.15, 1.45)
-  const initialIdleDuration = randomRange(0.4, 1.1)
+  const baseSpeed = randomRange(rng, 1.15, 1.45)
+  const initialIdleDuration = randomRange(rng, 0.4, 1.1)
   NpcPatrol.create(root, {
     waypointIndex: 0,
     baseSpeed,
@@ -493,9 +647,10 @@ function spawnNpc(id: number): Entity {
     actionTimer: initialIdleDuration,
     actionDuration: initialIdleDuration,
     animationState: -1,
-    jumpHeight: randomRange(0.8, 1.1),
+    jumpHeight: randomRange(rng, 0.8, 1.1),
     obstacleProbeEntity: obstacleProbe as number,
     obstacleBlockedCooldown: 0,
+    rngState: rng.state,
   })
   syncNpcAnimation(root)
 
@@ -510,8 +665,8 @@ export function spawnAllNpcs(count: number = 8, publicDogeIds: string[] = []): E
   npcPublicDogeIds.clear()
   const npcs: Entity[] = []
   for (let i = 0; i < count; i++) {
-    const npc = spawnNpc(i)
     const publicDogeId = publicDogeIds[i]
+    const npc = spawnNpc(i, publicDogeId ?? '')
     if (publicDogeId) {
       npcPublicDogeIds.set(npc, publicDogeId)
     }
@@ -560,7 +715,7 @@ export function killAllNpcs(): void {
 }
 
 /** NPC patrol system — moves NPCs between waypoints, updates label position */
-function getNpcByPublicDogeId(publicDogeId: string): Entity | null {
+export function getNpcEntityByPublicDogeId(publicDogeId: string): Entity | null {
   for (const [entity, mappedPublicDogeId] of npcPublicDogeIds.entries()) {
     if (mappedPublicDogeId === publicDogeId) {
       return entity
@@ -568,6 +723,10 @@ function getNpcByPublicDogeId(publicDogeId: string): Entity | null {
   }
 
   return null
+}
+
+function getNpcByPublicDogeId(publicDogeId: string): Entity | null {
+  return getNpcEntityByPublicDogeId(publicDogeId)
 }
 
 export function npcPatrolSystem(dt: number): void {
@@ -595,6 +754,62 @@ export function npcPatrolSystem(dt: number): void {
     }
 
     if (patrol.isBeingEliminated) {
+      if (patrol.labelEntity) {
+        const labelTransform = Transform.getMutable(patrol.labelEntity as Entity)
+        labelTransform.position = Vector3.create(
+          transform.position.x,
+          transform.position.y + NPC_LABEL_Y,
+          transform.position.z
+        )
+      }
+      continue
+    }
+
+    const publicDogeId = npcPublicDogeIds.get(entity)
+    const serverPoseTarget = publicDogeId
+      ? serverNpcPoseTargets.get(publicDogeId)
+      : null
+    if (serverPoseTarget) {
+      if (!serverPoseTarget.isFrozen) {
+        serverPoseTarget.secondsSinceSnapshot = Math.min(
+          SERVER_NPC_MAX_EXTRAPOLATION_SECONDS,
+          serverPoseTarget.secondsSinceSnapshot + Math.max(0, dt)
+        )
+      }
+      const predictedPose = getServerNpcTransform(
+        publicDogeId!,
+        serverPoseTarget.fallbackId,
+        serverPoseTarget.snapshotElapsedSeconds + serverPoseTarget.secondsSinceSnapshot
+      )
+      const serverAction = serverPoseTarget.isFrozen
+        ? 'idle'
+        : getServerNpcPresentationAction(
+            publicDogeId!,
+            serverPoseTarget.fallbackId,
+            serverPoseTarget.snapshotElapsedSeconds + serverPoseTarget.secondsSinceSnapshot
+          )
+      const groundedY = getGroundHeight(entity)
+      const followAmount = serverPoseTarget.snapPending
+        ? 1
+        : 1 - Math.exp(-SERVER_NPC_POSE_FOLLOW_SPEED * Math.max(0, dt))
+      const targetRotation = Quaternion.fromEulerDegrees(0, predictedPose.yawDegrees, 0)
+
+      transform.position = Vector3.create(
+        transform.position.x + (predictedPose.x - transform.position.x) * followAmount,
+        groundedY ?? transform.position.y,
+        transform.position.z + (predictedPose.z - transform.position.z) * followAmount
+      )
+      transform.rotation = Quaternion.slerp(transform.rotation, targetRotation, followAmount)
+      serverPoseTarget.snapPending = false
+      patrol.currentAction = getNpcActionFromServer(serverAction)
+      patrol.speed = serverAction === 'run'
+        ? PLAYER_RUN_SPEED
+        : serverAction === 'idle' || serverAction === 'bonk'
+          ? 0
+          : PLAYER_WALK_SPEED
+      syncNpcAnimation(entity)
+      updateNpcVisualOffset(entity)
+
       if (patrol.labelEntity) {
         const labelTransform = Transform.getMutable(patrol.labelEntity as Entity)
         labelTransform.position = Vector3.create(
@@ -659,11 +874,11 @@ export function npcPatrolSystem(dt: number): void {
         groundedCurrent.y,
         groundedCurrent.z + normalized.z * step
       )
-      transform.position = Vector3.create(
+      transform.position = clampToActivityArea(Vector3.create(
         nextPosition.x,
         groundedY ?? groundedCurrent.y,
         nextPosition.z
-      )
+      ))
 
       // Face movement direction
       const angle = Math.atan2(normalized.x, normalized.z)
@@ -691,10 +906,18 @@ export function npcPatrolSystem(dt: number): void {
 
 function getGroundHeight(entity: Entity): number | null {
   const result = RaycastResult.getOrNull(entity)
-  if (!result || result.hits.length === 0) return null
+  if (!result || result.hits.length === 0) return NPC_ARENA_GROUND_Y
   const hit = result.hits[0]
-  if (!hit || !hit.position) return null
-  return hit.position.y
+  if (!hit || !hit.position) return NPC_ARENA_GROUND_Y
+
+  // MoonLobby includes high decorative colliders. NPCs must only ground on
+  // the floor band, otherwise a downward ray can lift them into the sky.
+  const groundY = hit.position.y
+  if (groundY < NPC_GROUND_MIN_Y || groundY > NPC_GROUND_MAX_Y) {
+    return NPC_ARENA_GROUND_Y
+  }
+
+  return groundY
 }
 
 function updateNpcObstacleProbeDirection(entity: Entity, normalizedDirection: Vector3): void {

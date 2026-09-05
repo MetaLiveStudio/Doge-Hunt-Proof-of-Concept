@@ -12,13 +12,19 @@ import {
   ColliderLayer,
 } from '@dcl/sdk/ecs'
 import { Vector3 } from '@dcl/sdk/math'
+import { isMobile } from '@dcl/sdk/platform'
 import { trackArenaEntity } from './gameReset'
 
 const ARENA_X = 48
 const ARENA_Y = 0
 const ARENA_Z = 48
 const ARENA_SCALE = 1.5
-const ARENA_MODEL_SRC = 'models/MoonLobby1.glb'
+const DESKTOP_ARENA_MODEL_SRC = 'models/MoonLobby1.glb'
+const MOBILE_ARENA_MODEL_SRC = 'models/MoonLobby1Mobile2.glb'
+
+function getArenaModelSrc(): string {
+  return isMobile() ? MOBILE_ARENA_MODEL_SRC : DESKTOP_ARENA_MODEL_SRC
+}
 
 export function buildArena(): void {
   const arenaRoot = engine.addEntity()
@@ -35,7 +41,7 @@ export function buildArena(): void {
   })
 
   GltfContainer.create(arenaModel, {
-    src: ARENA_MODEL_SRC,
+    src: getArenaModelSrc(),
     // The updated MoonLobby model ships dedicated collider meshes; only capture those.
     invisibleMeshesCollisionMask: ColliderLayer.CL_PHYSICS,
   })

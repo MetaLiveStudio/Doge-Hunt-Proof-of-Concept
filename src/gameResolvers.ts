@@ -7,12 +7,27 @@ export type BonkRequest = {
   attackerPlayerId: string
   origin: Vector3
   forward: Vector3
+  candidatePublicDogeId?: string
+  candidateTargetNpc?: Entity
+  aimedPlayerPublicDogeId?: string
+  aimForward?: Vector3
+}
+
+export type BonkActionStartRequest = {
+  attackerPlayerId: string
+  origin: Vector3
+  forward: Vector3
 }
 
 export type BonkResult =
   | {
       outcome: 'miss'
       request: BonkRequest
+    }
+  | {
+      outcome: 'pending'
+      request: BonkRequest
+      requestId: string
     }
   | {
       outcome: 'hit-npc'
@@ -26,8 +41,13 @@ export type TurnToRockRequest = {
 
 export type TurnToRockResult =
   | {
+      outcome: 'pending'
+      request: TurnToRockRequest
+      requestId: string
+    }
+  | {
       outcome: 'rejected'
-      reason: 'missing-player-transform' | 'already-active' | 'cooldown'
+      reason: 'missing-player-transform' | 'already-active' | 'cooldown' | 'pending-server-result' | 'server-rejected'
       request: TurnToRockRequest
     }
   | {
@@ -50,6 +70,11 @@ export type RoundEndRequest = {
 
 export type RoundEndResult =
   | {
+      outcome: 'pending'
+      request: RoundEndRequest
+      requestId: string
+    }
+  | {
       outcome: 'recorded'
       request: RoundEndRequest
       round: LocalRoundState
@@ -61,12 +86,14 @@ export type RoundEndResult =
     }
 
 export type GameplayResolvers = {
+  notifyBonkActionStart: (request: BonkActionStartRequest) => void
   resolveBonk: (request: BonkRequest) => BonkResult
   resolveTurnToRock: (request: TurnToRockRequest) => TurnToRockResult
   resolveRoundEnd: (request: RoundEndRequest) => RoundEndResult
 }
 
 let gameplayResolvers: GameplayResolvers = {
+  notifyBonkActionStart: notifyMissingBonkActionStart,
   resolveBonk: resolveMissingBonk,
   resolveTurnToRock: resolveMissingTurnToRock,
   resolveRoundEnd: resolveLocalRoundEnd,
@@ -83,6 +110,10 @@ export function requestBonk(request: BonkRequest): BonkResult {
   return gameplayResolvers.resolveBonk(request)
 }
 
+export function notifyBonkActionStart(request: BonkActionStartRequest): void {
+  gameplayResolvers.notifyBonkActionStart(request)
+}
+
 export function requestTurnToRock(request: TurnToRockRequest): TurnToRockResult {
   return gameplayResolvers.resolveTurnToRock(request)
 }
@@ -96,6 +127,10 @@ function resolveMissingBonk(request: BonkRequest): BonkResult {
     outcome: 'miss',
     request,
   }
+}
+
+function notifyMissingBonkActionStart(_request: BonkActionStartRequest): void {
+  // Local fallback has no remote peers to notify.
 }
 
 function resolveMissingTurnToRock(request: TurnToRockRequest): TurnToRockResult {

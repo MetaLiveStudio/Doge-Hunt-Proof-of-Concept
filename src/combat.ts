@@ -8,22 +8,30 @@ import {
   PointerEventType, inputSystem,
 } from '@dcl/sdk/ecs'
 import { Vector3 } from '@dcl/sdk/math'
+import { isMobile } from '@dcl/sdk/platform'
 import {
   NpcPatrol,
   aliveCount,
   applyNpcPublicDogePresentation,
+  getNpcEntityByPublicDogeId,
   getNpcPublicDogeId,
   startNpcElimination,
 } from './npc'
 import { addKillFeedMessage } from './ui'
 import { recordLocalBonkHit } from './localMatchState'
-import { requestBonk, setGameplayResolvers } from './gameResolvers'
+import { notifyBonkActionStart, requestBonk, setGameplayResolvers } from './gameResolvers'
 import type { BonkRequest, BonkResult } from './gameResolvers'
 import {
   playPlayerAttackAnimation,
   PLAYER_ATTACK_IMPACT_TIME,
   PLAYER_ATTACK_TOTAL_DURATION,
 } from './player'
+import {
+  canLocalServerPlayerAct,
+  getLocalServerPlayerStatus,
+} from './client/serverPublicStateClient'
+import { playBonkHitSound, playBonkMissSound } from './client/gameAudio'
+import { capturePlayerBonkAim, updatePlayerBonkTargeting, type PlayerBonkAim } from './client/playerBonkTargeting'
 
 const KILL_MESSAGES = [
   'Such eliminate. Very dead. Wow.',
@@ -40,15 +48,17 @@ const KILL_MESSAGES = [
 
 export let totalBonks = 0
 
-const ATTACK_MIN_FORWARD = 0.25
-const ATTACK_RANGE = 2.9
-const ATTACK_RADIUS = 1.92
-const ATTACK_HIT_WINDOW_SECONDS = 0.12
+const ATTACK_MIN_FORWARD = 0.15
+const ATTACK_RANGE = 3.95
+const ATTACK_RADIUS = 2.7
+const MOBILE_ATTACK_HIT_SCALE = 0.70
+const ATTACK_HIT_WINDOW_SECONDS = 0.16
 const COMBAT_START_INPUT_GRACE_SECONDS = 0.2
 
 let attackElapsed = PLAYER_ATTACK_TOTAL_DURATION
 let hasHitThisSwing = false
 let startInputGraceTimer = 0
+let pendingPlayerAim: PlayerBonkAim | null = null
 
 const LOCAL_PLAYER_ID = 'local-player'
 
@@ -57,15 +67,39 @@ export function resetCombat(): void {
   totalBonks = 0
   attackElapsed = PLAYER_ATTACK_TOTAL_DURATION
   hasHitThisSwing = false
+  pendingPlayerAim = null
   startInputGraceTimer = COMBAT_START_INPUT_GRACE_SECONDS
 }
 
 export function triggerPlayerBonkAttack(): boolean {
   if (startInputGraceTimer > 0) return false
+  if (!canLocalServerPlayerAct()) {
+    console.log(`[Client][T] bonk input blocked localStatus=${getLocalServerPlayerStatus()}`)
+    return false
+  }
 
   attackElapsed = 0
   hasHitThisSwing = false
+  const attackPose = tryGetAttackPose()
+  const attackEnvelope = getAttackHitEnvelope()
+  pendingPlayerAim = capturePlayerBonkAim(attackPose ? {
+    origin: attackPose.origin,
+    forward: attackPose.forward,
+    minForward: ATTACK_MIN_FORWARD,
+    range: attackEnvelope.range,
+    radius: attackEnvelope.radius,
+  } : null)
+
+  if (attackPose) {
+    notifyBonkActionStart({
+      attackerPlayerId: LOCAL_PLAYER_ID,
+      origin: attackPose.origin,
+      forward: attackPose.forward,
+    })
+  }
+
   playPlayerAttackAnimation()
+  console.log(`[Client][RayBonk] swing platform=${isMobile() ? 'mobile' : 'desktop'} aimed=${pendingPlayerAim?.publicDogeId ?? 'none'} source=${pendingPlayerAim?.source ?? 'none'} targetDistance=${pendingPlayerAim ? pendingPlayerAim.rayLength.toFixed(2) : 'n/a'}`)
   return true
 }
 
@@ -113,7 +147,7 @@ function tryGetAttackPose(): { origin: Vector3; forward: Vector3 } | null {
 }
 
 function resolveLocalBonk(request: BonkRequest): BonkResult {
-  const targetNpc = findBestNpcInFront(request.origin, request.forward)
+  const targetNpc = request.candidateTargetNpc ?? findBestNpcInFront(request.origin, request.forward)
 
   if (!targetNpc) {
     return {
@@ -132,16 +166,36 @@ function resolveLocalBonk(request: BonkRequest): BonkResult {
 setGameplayResolvers({ resolveBonk: resolveLocalBonk })
 
 function applyBonkResult(result: BonkResult): boolean {
-  if (result.outcome === 'miss') return false
+  if (result.outcome === 'pending') return true
+  if (result.outcome === 'miss') {
+    playBonkMissSound()
+    return false
+  }
 
   const publicDogeId = getNpcPublicDogeId(result.targetNpc)
   recordLocalBonkHit(publicDogeId)
-  return applyNpcBonkPresentation(result.targetNpc, result.request.origin, publicDogeId)
+  const applied = applyNpcBonkPresentation(result.targetNpc, result.request.origin, publicDogeId)
+  if (applied) {
+    playBonkHitSound()
+  }
+  return applied
+}
+
+export function applyServerBonkAccepted(publicDogeId: string, hitOrigin: Vector3): boolean {
+  const targetNpc = getNpcEntityByPublicDogeId(publicDogeId)
+  if (!targetNpc) {
+    console.log(`[Client][S] bonkResult accepted but local NPC is missing publicDogeId=${publicDogeId}`)
+    return false
+  }
+
+  recordLocalBonkHit(publicDogeId)
+  return applyNpcBonkPresentation(targetNpc, hitOrigin, publicDogeId)
 }
 
 function findBestNpcInFront(origin: Vector3, forward: Vector3): Entity | null {
   let bestTarget: Entity | null = null
   let bestDistance = Number.POSITIVE_INFINITY
+  const attackEnvelope = getAttackHitEnvelope()
 
   for (const [entity] of engine.getEntitiesWith(NpcPatrol, Transform)) {
     const patrol = NpcPatrol.get(entity)
@@ -152,12 +206,12 @@ function findBestNpcInFront(origin: Vector3, forward: Vector3): Entity | null {
     const flatToNpc = Vector3.create(toNpc.x, 0, toNpc.z)
 
     const forwardDistance = Vector3.dot(flatToNpc, forward)
-    if (forwardDistance < ATTACK_MIN_FORWARD || forwardDistance > ATTACK_RANGE) continue
+    if (forwardDistance < ATTACK_MIN_FORWARD || forwardDistance > attackEnvelope.range) continue
 
     const projected = Vector3.scale(forward, forwardDistance)
     const lateralOffset = Vector3.subtract(flatToNpc, projected)
     const lateralDistance = Vector3.length(lateralOffset)
-    if (lateralDistance > ATTACK_RADIUS) continue
+    if (lateralDistance > attackEnvelope.radius) continue
 
     const planarDistance = Vector3.length(flatToNpc)
     if (planarDistance < bestDistance) {
@@ -169,14 +223,26 @@ function findBestNpcInFront(origin: Vector3, forward: Vector3): Entity | null {
   return bestTarget
 }
 
+function getAttackHitEnvelope(): { range: number; radius: number } {
+  const scale = isMobile() ? MOBILE_ATTACK_HIT_SCALE : 1
+  return {
+    range: ATTACK_RANGE * scale,
+    radius: ATTACK_RADIUS * scale,
+  }
+}
+
 /** Combat system — tap anywhere to swing, hit only when an NPC is inside the attack zone */
 export function combatSystem(dt: number): void {
+  updatePlayerBonkTargeting()
+
   if (startInputGraceTimer > 0) {
     startInputGraceTimer = Math.max(0, startInputGraceTimer - dt)
     return
   }
 
-  if (inputSystem.isTriggered(InputAction.IA_POINTER, PointerEventType.PET_DOWN)) {
+  const desktopBonkPressed = !isMobile()
+    && inputSystem.isTriggered(InputAction.IA_POINTER, PointerEventType.PET_DOWN)
+  if (desktopBonkPressed) {
     triggerPlayerBonkAttack()
   }
 
@@ -190,11 +256,24 @@ export function combatSystem(dt: number): void {
   const attackPose = tryGetAttackPose()
   if (!attackPose) return
 
+  const candidateTargetNpc = findBestNpcInFront(attackPose.origin, attackPose.forward)
+  const candidatePublicDogeId = candidateTargetNpc
+    ? getNpcPublicDogeId(candidateTargetNpc) ?? ''
+    : ''
+  const aimedPlayerPublicDogeId = pendingPlayerAim?.publicDogeId ?? ''
+  const aimForward = pendingPlayerAim?.forward
+
   const bonkResult = requestBonk({
     attackerPlayerId: LOCAL_PLAYER_ID,
     origin: attackPose.origin,
     forward: attackPose.forward,
+    candidatePublicDogeId,
+    candidateTargetNpc: candidateTargetNpc ?? undefined,
+    aimedPlayerPublicDogeId,
+    aimForward,
   })
+
+  pendingPlayerAim = null
 
   if (applyBonkResult(bonkResult)) {
     hasHitThisSwing = true
